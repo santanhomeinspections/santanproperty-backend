@@ -8,7 +8,7 @@ require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
-const { Client, Environment } = require('squareup');
+const { Client, Environment } = require('square');
 const nodemailer = require('nodemailer');
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
