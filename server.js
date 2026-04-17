@@ -8,7 +8,7 @@ require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
-const { Client, Environment } = require('square');
+const { SquareClient, SquareEnvironment } = require('square');
 const nodemailer = require('nodemailer');
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
@@ -72,11 +72,11 @@ async function sms(to, body) {
 }
 
 // ── SQUARE ───────────────────────────────────────────────────────
-const sq = new Client({
-  accessToken: process.env.SQUARE_ACCESS_TOKEN,
+const sq = new SquareClient({
+  token: process.env.SQUARE_ACCESS_TOKEN,
   environment: process.env.NODE_ENV === 'production'
-    ? Environment.Production
-    : Environment.Sandbox,
+    ? SquareEnvironment.Production
+    : SquareEnvironment.Sandbox,
 });
 
 // ── EMAIL ────────────────────────────────────────────────────────
@@ -241,21 +241,21 @@ app.post('/api/book', async (req, res) => {
   // 6. Square Invoice
   let invoiceUrl = null;
   try {
-    const custSearch = await sq.customersApi.searchCustomers({
+    const custSearch = await sq.customers.searchCustomers({
       query: { filter: { emailAddress: { exact: buyer.email } } },
     });
     let custId;
     if (custSearch.result.customers?.length) {
       custId = custSearch.result.customers[0].id;
     } else {
-      const nc = await sq.customersApi.createCustomer({
+      const nc = await sq.customers.createCustomer({
         givenName: buyer.firstName, familyName: buyer.lastName,
         emailAddress: buyer.email, phoneNumber: buyer.phone,
         idempotencyKey: uuidv4(),
       });
       custId = nc.result.customer.id;
     }
-    const order = await sq.ordersApi.createOrder({
+    const order = await sq.orders.createOrder({
       order: {
         locationId: process.env.SQUARE_LOCATION_ID, customerId: custId,
         lineItems: [{
@@ -268,7 +268,7 @@ app.post('/api/book', async (req, res) => {
       },
       idempotencyKey: uuidv4(),
     });
-    const inv = await sq.invoicesApi.createInvoice({
+    const inv = await sq.invoices.createInvoice({
       invoice: {
         locationId: process.env.SQUARE_LOCATION_ID,
         orderId: order.result.order.id,
@@ -283,7 +283,7 @@ app.post('/api/book', async (req, res) => {
       },
       idempotencyKey: uuidv4(),
     });
-    await sq.invoicesApi.publishInvoice(inv.result.invoice.id, {
+    await sq.invoices.publishInvoice(inv.result.invoice.id, {
       version: inv.result.invoice.version, idempotencyKey: uuidv4(),
     });
     invoiceUrl = inv.result.invoice.publicUrl;
