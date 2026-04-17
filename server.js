@@ -107,7 +107,7 @@ async function checkTripCharge(address) {
   // Geocode the address using Google Maps Geocoding API
   try {
     const encoded = encodeURIComponent(address);
-    const url = \`https://maps.googleapis.com/maps/api/geocode/json?address=\${encoded}&key=\${process.env.GOOGLE_MAPS_API_KEY}\`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=\${encoded}&key=\${process.env.GOOGLE_MAPS_API_KEY}`;
     const r = await fetch(url);
     const data = await r.json();
     if (data.results?.[0]) {
@@ -399,17 +399,17 @@ app.post('/api/book', async (req, res) => {
   booking.finalPrice = finalPrice;
 
   // Build confirm URL
-  const BASE_URL = process.env.RAILWAY_URL || \`https://santanproperty-backend-production.up.railway.app\`;
-  const confirmUrl = \`\${BASE_URL}/confirm/\${token}\`;
-  const cancelUrl  = \`\${BASE_URL}/cancel/\${token}\`;
+  const BASE_URL = process.env.RAILWAY_URL || `https://santanproperty-backend-production.up.railway.app`;
+  const confirmUrl = `\${BASE_URL}/confirm/\${token}`;
+  const cancelUrl  = `\${BASE_URL}/cancel/\${token}`;
 
   // Send owner alert email with confirm/cancel links
   try {
     await mailer.sendMail({
-      from: \`"San Tan Booking" <\${process.env.EMAIL_USER}>\`,
+      from: `"San Tan Booking" <\${process.env.EMAIL_USER}>`,
       to: process.env.OWNER_EMAIL,
-      subject: \`⏳ PENDING BOOKING: \${fullName} — \${dateFmt} @ \${time}\`,
-      html: \`<div style="font-family:Arial,sans-serif;max-width:560px">
+      subject: `⏳ PENDING BOOKING: \${fullName} — \${dateFmt} @ \${time}`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:560px">
         <h2 style="color:#0F1C35">📋 New Booking Request — Awaiting Your Confirmation</h2>
         <p><b>Service:</b> \${svcLabel}<br><b>Add-ons:</b> \${addonsLine}</p>
         <p><b>Date/Time:</b> \${dateFmt} @ \${time}\${endTime?' → '+endTime:''}</p>
@@ -418,23 +418,23 @@ app.post('/api/book', async (req, res) => {
         <hr/>
         <p><b>Buyer:</b> \${fullName}<br>📞 \${buyer.phone}<br>✉️ \${buyer.email}</p>
         <p><b>Buyer's Agent:</b> \${buyerAgent.name}\${buyerAgent.brokerage?' — '+buyerAgent.brokerage:''}<br>📞 \${buyerAgent.phone}</p>
-        \${sellerAgent?.name ? \`<p><b>Seller's Agent:</b> \${sellerAgent.name}\${sellerAgent.brokerage?' — '+sellerAgent.brokerage:''}<br>📞 \${sellerAgent.phone||'—'}</p>\` : ''}
-        \${notes ? \`<p><b>Notes:</b> \${notes}</p>\` : ''}
-        \${trip.apply ? \`<p style="background:#FFF3CD;padding:10px;border-radius:6px">⚠️ <b>Trip charge applies</b> — address is \${trip.miles} miles from base. $\${TRIP_CHARGE_AMT} will be added to total.</p>\` : ''}
+        \${sellerAgent?.name ? `<p><b>Seller's Agent:</b> \${sellerAgent.name}\${sellerAgent.brokerage?' — '+sellerAgent.brokerage:''}<br>📞 \${sellerAgent.phone||'—'}</p>` : ''}
+        \${notes ? `<p><b>Notes:</b> \${notes}</p>` : ''}
+        \${trip.apply ? `<p style="background:#FFF3CD;padding:10px;border-radius:6px">⚠️ <b>Trip charge applies</b> — address is \${trip.miles} miles from base. $\${TRIP_CHARGE_AMT} will be added to total.</p>` : ''}
         <div style="margin:28px 0;display:flex;gap:16px">
           <a href="\${confirmUrl}" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700;font-size:1rem">✅ CONFIRM &amp; SEND TEXTS</a>
           &nbsp;&nbsp;
           <a href="\${cancelUrl}" style="background:#C0392B;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700;font-size:1rem">❌ CANCEL</a>
         </div>
         <p style="color:#888;font-size:.8rem">This request expires in 24 hours. Texts will NOT go out until you tap Confirm.</p>
-      </div>\`,
+      </div>`,
     });
-    console.log(\`📧 Owner alert sent for pending \${confId}\`);
+    console.log(`📧 Owner alert sent for pending \${confId}`);
   } catch(e) { console.error('Owner alert email:', e.message); }
 
   // Also text owner
   await sms(process.env.OWNER_PHONE,
-    \`⏳ NEW BOOKING REQUEST\n\${fullName}\n📍 \${address}\n📅 \${dateFmt} @ \${time}\n💰 $\${finalPrice}\${trip.apply?' (incl. $'+TRIP_CHARGE_AMT+' trip charge)':''}\n\nCheck your email to confirm.\`
+    `⏳ NEW BOOKING REQUEST\n\${fullName}\n📍 \${address}\n📅 \${dateFmt} @ \${time}\n💰 $\${finalPrice}\${trip.apply?' (incl. $'+TRIP_CHARGE_AMT+' trip charge)':''}\n\nCheck your email to confirm.`
   );
 
   res.json({
@@ -465,17 +465,17 @@ app.get('/confirm/:token', async (req, res) => {
   let calId = null;
   try {
     const ev = {
-      summary:  \`\${svcLabel} — \${fullName}\`,
+      summary:  `\${svcLabel} — \${fullName}`,
       location: address,
       description: [
-        \`Conf: \${confId}\`, \`Service: \${svcLabel}\`,
-        addons.length ? \`Add-ons: \${addonsLine}\` : null,
-        \`Address: \${address}\`, \`Sq Ft: \${sqft}  |  Year: \${yearBuilt}\`,
-        \`Est. Total: $\${finalPrice}\${tripCharge.apply?' (incl. trip charge)':''}  |  Duration: \${totalMins} min\`, \`\`,
-        \`BUYER: \${fullName}  |  \${buyer.phone}  |  \${buyer.email}\`,
-        \`BUYER'S AGENT: \${buyerAgent.name}\${buyerAgent.brokerage?' — '+buyerAgent.brokerage:''}  |  \${buyerAgent.phone}\`,
-        sellerAgent?.name ? \`SELLER'S AGENT: \${sellerAgent.name}\${sellerAgent.brokerage?' — '+sellerAgent.brokerage:''}  |  \${sellerAgent.phone||'—'}\` : null,
-        notes ? \`Notes: \${notes}\` : null,
+        `Conf: \${confId}`, `Service: \${svcLabel}`,
+        addons.length ? `Add-ons: \${addonsLine}` : null,
+        `Address: \${address}`, `Sq Ft: \${sqft}  |  Year: \${yearBuilt}`,
+        `Est. Total: $\${finalPrice}\${tripCharge.apply?' (incl. trip charge)':''}  |  Duration: \${totalMins} min`, ``,
+        `BUYER: \${fullName}  |  \${buyer.phone}  |  \${buyer.email}`,
+        `BUYER'S AGENT: \${buyerAgent.name}\${buyerAgent.brokerage?' — '+buyerAgent.brokerage:''}  |  \${buyerAgent.phone}`,
+        sellerAgent?.name ? `SELLER'S AGENT: \${sellerAgent.name}\${sellerAgent.brokerage?' — '+sellerAgent.brokerage:''}  |  \${sellerAgent.phone||'—'}` : null,
+        notes ? `Notes: \${notes}` : null,
       ].filter(Boolean).join('\n'),
       start: { dateTime: startDT.toISOString(), timeZone: TIMEZONE },
       end:   { dateTime: endDT.toISOString(),   timeZone: TIMEZONE },
@@ -485,41 +485,41 @@ app.get('/confirm/:token', async (req, res) => {
     };
     const r = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: ev, sendUpdates:'all' });
     calId = r.data.id;
-    console.log(\`✅ Calendar: \${calId}\`);
+    console.log(`✅ Calendar: \${calId}`);
   } catch(e) { console.error('Calendar:', e.message); }
 
   // 2. SMS — Buyer
   await sms(buyer.phone,
-    \`Hi \${buyer.firstName}! Your inspection is confirmed.\n\n\` +
-    \`📍 \${address}\n📅 \${dateFmt}\n⏰ \${time}–\${endTime||'TBD'}\n\` +
-    \`🔖 \${svcLabel}\` + (addons.length ? \`\n➕ \${addonsLine}\` : '') + \`\n\` +
-    \`💰 Est. $\${finalPrice} — pay day-of\${tripCharge.apply?' (incl. $'+TRIP_CHARGE_AMT+' trip charge)':''}\n\` +
-    \`🔖 Conf: \${confId}\n\n\` +
-    \`Questions or need to reschedule?\n📞 (480) 418-7633\n📧 santanpropertyinspections@gmail.com\n– San Tan Property Inspections\`
+    `Hi \${buyer.firstName}! Your inspection is confirmed.\n\n` +
+    `📍 \${address}\n📅 \${dateFmt}\n⏰ \${time}–\${endTime||'TBD'}\n` +
+    `🔖 \${svcLabel}` + (addons.length ? `\n➕ \${addonsLine}` : '') + `\n` +
+    `💰 Est. $\${finalPrice} — pay day-of\${tripCharge.apply?' (incl. $'+TRIP_CHARGE_AMT+' trip charge)':''}\n` +
+    `🔖 Conf: \${confId}\n\n` +
+    `Questions or need to reschedule?\n📞 (480) 418-7633\n📧 santanpropertyinspections@gmail.com\n– San Tan Property Inspections`
   );
 
   // 3. SMS — Buyer's Agent
   await sms(buyerAgent.phone,
-    \`Hi \${buyerAgent.name}! Inspection scheduled for your buyer.\n\n\` +
-    \`📍 \${address}\n👤 Buyer: \${fullName}\n📅 \${dateFmt} @ \${time}\n🔖 \${svcLabel}\n🔖 Conf: \${confId}\n\n\` +
-    \`✅ ACTION NEEDED — Please confirm with seller's agent:\n\` +
-    \`• Seller's agent is aware of inspection date & time\n\` +
-    \`• GAS is on & accessible\n\` +
-    \`• WATER is on & accessible\n\` +
-    \`• ELECTRICAL is on & accessible\n\` +
-    \`• ATTIC ACCESS is clear & accessible\n\n\` +
-    \`Questions? 📞 (480) 418-7633 | santanpropertyinspections@gmail.com\n– San Tan Property Inspections\`
+    `Hi \${buyerAgent.name}! Inspection scheduled for your buyer.\n\n` +
+    `📍 \${address}\n👤 Buyer: \${fullName}\n📅 \${dateFmt} @ \${time}\n🔖 \${svcLabel}\n🔖 Conf: \${confId}\n\n` +
+    `✅ ACTION NEEDED — Please confirm with seller's agent:\n` +
+    `• Seller's agent is aware of inspection date & time\n` +
+    `• GAS is on & accessible\n` +
+    `• WATER is on & accessible\n` +
+    `• ELECTRICAL is on & accessible\n` +
+    `• ATTIC ACCESS is clear & accessible\n\n` +
+    `Questions? 📞 (480) 418-7633 | santanpropertyinspections@gmail.com\n– San Tan Property Inspections`
   );
 
   // 4. SMS — Seller's Agent (if provided)
   if (sellerAgent?.phone) {
     await sms(sellerAgent.phone,
-      \`Hello\${sellerAgent.name?' '+sellerAgent.name:''}! An inspection is scheduled at your listing.\n\n\` +
-      \`📍 \${address}\n📅 \${dateFmt} @ \${time}\n🔖 \${svcLabel}\n\n\` +
-      \`Please ensure by inspection day:\n\` +
-      \`• GAS — on & accessible\n• WATER — on & accessible\n\` +
-      \`• ELECTRICAL — on & accessible\n• ATTIC ACCESS — clear & accessible\n\n\` +
-      \`Questions? 📞 (480) 418-7633 | santanpropertyinspections@gmail.com\n– San Tan Property Inspections\`
+      `Hello\${sellerAgent.name?' '+sellerAgent.name:''}! An inspection is scheduled at your listing.\n\n` +
+      `📍 \${address}\n📅 \${dateFmt} @ \${time}\n🔖 \${svcLabel}\n\n` +
+      `Please ensure by inspection day:\n` +
+      `• GAS — on & accessible\n• WATER — on & accessible\n` +
+      `• ELECTRICAL — on & accessible\n• ATTIC ACCESS — clear & accessible\n\n` +
+      `Questions? 📞 (480) 418-7633 | santanpropertyinspections@gmail.com\n– San Tan Property Inspections`
     );
   }
 
@@ -546,7 +546,7 @@ app.get('/confirm/:token', async (req, res) => {
         lineItems: [{
           name: svcLabel+(addons.length?' + Add-ons':'')+(tripCharge.apply?' + Trip Charge':''),
           quantity: '1',
-          note: \`\${address} — \${date} @ \${time} | \${confId}\`,
+          note: `\${address} — \${date} @ \${time} | \${confId}`,
           basePriceMoney: { amount: BigInt(finalPrice*100), currency:'USD' },
         }],
         referenceId: confId,
@@ -560,8 +560,8 @@ app.get('/confirm/:token', async (req, res) => {
         primaryRecipient: { customerId: custId },
         paymentRequests: [{ requestType: 'BALANCE', dueDate: date, automaticPaymentSource: 'NONE' }],
         deliveryMethod: 'EMAIL',
-        title: \`Inspection – \${svcLabel}\`,
-        description: \`\${address}\n\${date} @ \${time}\n\${confId}\`,
+        title: `Inspection – \${svcLabel}`,
+        description: `\${address}\n\${date} @ \${time}\n\${confId}`,
         acceptedPaymentMethods: { card:true, bankAccount:false, squareGiftCard:false },
       },
       idempotencyKey: uuidv4(),
@@ -570,20 +570,20 @@ app.get('/confirm/:token', async (req, res) => {
       version: inv.result.invoice.version, idempotencyKey: uuidv4(),
     });
     invoiceUrl = inv.result.invoice.publicUrl;
-    console.log(\`✅ Square invoice created\`);
+    console.log(`✅ Square invoice created`);
   } catch(e) { console.error('Square:', e.message); }
 
   // 6. Confirmation email to buyer
   const invLine = invoiceUrl
-    ? \`<p>💳 <a href="\${invoiceUrl}" style="color:#C9A84C">View your Square invoice</a> — or pay in person on inspection day.</p>\`
+    ? `<p>💳 <a href="\${invoiceUrl}" style="color:#C9A84C">View your Square invoice</a> — or pay in person on inspection day.</p>`
     : '<p>💳 Payment via Square, Venmo, Zelle, or cash on inspection day.</p>';
 
   try {
     await mailer.sendMail({
-      from: \`"San Tan Property Inspections" <\${process.env.EMAIL_USER}>\`,
+      from: `"San Tan Property Inspections" <\${process.env.EMAIL_USER}>`,
       to: buyer.email,
-      subject: \`Inspection Confirmed — \${dateFmt} @ \${time} [\${confId}]\`,
-      html: \`<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">
+      subject: `Inspection Confirmed — \${dateFmt} @ \${time} [\${confId}]`,
+      html: `<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">
         <h2 style="color:#0F1C35">Inspection Confirmed ✅</h2>
         <p style="color:#555">Hi \${buyer.firstName}, here are your booking details:</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0">
@@ -599,18 +599,18 @@ app.get('/confirm/:token', async (req, res) => {
         <p style="color:#555">Questions? Call/text <strong>(480) 418-7633</strong></p>
         <hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>
         <p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>
-      </div>\`,
+      </div>`,
     });
-    console.log(\`✅ Confirmation email sent to buyer for \${confId}\`);
+    console.log(`✅ Confirmation email sent to buyer for \${confId}`);
   } catch(e) { console.error('Buyer email:', e.message); }
 
-  res.send(\`<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C9A84C">
+  res.send(`<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C9A84C">
     <h2 style="color:#1B2D52">✅ Booking Confirmed!</h2>
     <p>Texts sent to buyer and agents.</p>
     <p><b>\${fullName}</b><br>\${dateFmt} @ \${time}<br>\${address}</p>
     <p style="color:#C9A84C;font-weight:700">Conf: \${confId}</p>
-    \${tripCharge.apply ? \`<p style="background:#FFF3CD;padding:10px;border-radius:6px">⚠️ Trip charge of $\${TRIP_CHARGE_AMT} applied (\${tripCharge.miles} miles)</p>\` : ''}
-  </div>\`);
+    \${tripCharge.apply ? `<p style="background:#FFF3CD;padding:10px;border-radius:6px">⚠️ Trip charge of $\${TRIP_CHARGE_AMT} applied (\${tripCharge.miles} miles)</p>` : ''}
+  </div>`);
 });
 
 // ── CANCEL BOOKING ────────────────────────────────────────────────
@@ -619,12 +619,12 @@ app.get('/cancel/:token', async (req, res) => {
   if (!booking) return res.send('<h2>❌ This link has expired or already been used.</h2>');
   const { confId, fullName, dateFmt, time } = booking;
   pendingBookings.delete(req.params.token);
-  console.log(\`❌ Booking cancelled: \${confId}\`);
-  res.send(\`<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C0392B">
+  console.log(`❌ Booking cancelled: \${confId}`);
+  res.send(`<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C0392B">
     <h2 style="color:#C0392B">❌ Booking Cancelled</h2>
     <p>The booking for <b>\${fullName}</b> on \${dateFmt} @ \${time} has been cancelled.</p>
     <p>No texts were sent.</p>
-  </div>\`);
+  </div>`);
 });
 
 // ── GOOGLE OAUTH (one-time setup) ────────────────────────────────
