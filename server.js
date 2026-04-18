@@ -40,7 +40,7 @@ const calendar   = google.calendar({ version: 'v3', auth: oAuth2Client });
 const CALENDAR_ID       = process.env.GOOGLE_CALENDAR_ID || 'primary';
 const BLOCK_CALENDAR_ID = '21fd9f285b32f1b290a601236f376d2495c6c0a363d4224bce7c0bc4aca7e65b@group.calendar.google.com';
 const TIMEZONE    = 'America/Phoenix';
-const ALL_SLOTS   = ['8:00 AM','9:00 AM','10:00 AM','11:00 AM','1:00 PM','2:00 PM','3:00 PM'];
+const ALL_SLOTS   = ['8:00 AM','8:30 AM','9:00 AM','9:30 AM','10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','1:00 PM','1:30 PM','2:00 PM','2:30 PM','3:00 PM'];
 
 function slotToMins(slot) {
   const [time, period] = slot.split(' ');
@@ -135,13 +135,17 @@ app.get('/api/availability', async function(req, res) {
   try {
     const parts = date.split('-').map(Number);
     const y = parts[0], mo = parts[1], d = parts[2];
-    const timeMin = new Date(y, mo-1, d, 0,  0,  0).toISOString();
-    const timeMax = new Date(y, mo-1, d, 23, 59, 59).toISOString();
+    // Use Arizona time (MST = UTC-7, no DST)
+    const timeMin = `${date}T00:00:00-07:00`;
+    const timeMax = `${date}T23:59:59-07:00`;
 
-    // Fetch both calendars in parallel
+    // Fetch both calendars in parallel — blocking calendar failure won't crash availability
     const [mainResp, blockResp] = await Promise.all([
-      calendar.events.list({ calendarId: CALENDAR_ID,       timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
-      calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
+      calendar.events.list({ calendarId: CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
+      calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }).catch(function(e){
+        console.warn('Block calendar fetch failed (check sharing permissions):', e.message);
+        return { data: { items: [] } };
+      }),
     ]);
 
     const allItems = [
@@ -171,7 +175,7 @@ app.get('/api/availability', async function(req, res) {
         const slotMins = slotToMins(slot);
         const slotH = Math.floor(slotMins / 60);
         const slotM = slotMins % 60;
-        const slotStart = new Date(y, mo-1, d, slotH, slotM, 0);
+        const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
 
         // Block slot if: event starts exactly at slot, OR event spans across slot start
         const startsAtSlot = evStart.getHours() === slotH && evStart.getMinutes() === slotM;
