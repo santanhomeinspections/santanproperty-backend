@@ -8,7 +8,7 @@ require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
-const { SquareClient, SquareEnvironment } = require('square');
+// Square removed — payments handled manually via Square dashboard
 // Email via Resend API (no package needed)
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
@@ -76,12 +76,7 @@ async function sms(to, body) {
 const pendingBookings = new Map();
 
 // SQUARE
-const sq = new SquareClient({
-  token: process.env.SQUARE_ACCESS_TOKEN,
-  environment: process.env.NODE_ENV === 'production'
-    ? SquareEnvironment.Production
-    : SquareEnvironment.Sandbox,
-});
+
 
 // SERVICE AREA & TRIP CHARGE
 const SERVICE_CITIES = [
@@ -248,7 +243,9 @@ app.post('/api/book', async function(req, res) {
   const parts2   = date.split('-').map(Number);
   const y2=parts2[0], mo2=parts2[1], d2=parts2[2];
   const sm       = slotToMins(time);
-  const startDT  = new Date(y2, mo2-1, d2, Math.floor(sm/60), sm%60, 0);
+  const slotH = Math.floor(sm/60), slotM = sm%60;
+  // Use Arizona time (MST = UTC-7, no DST)
+  const startDT  = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
   const endDT    = new Date(startDT.getTime() + (totalMins||120)*60000);
 
   const SVC = {
@@ -376,7 +373,9 @@ app.get('/confirm/:token', async function(req, res) {
   const parts3 = date.split('-').map(Number);
   const y3=parts3[0], mo3=parts3[1], d3=parts3[2];
   const sm2 = slotToMins(time);
-  const startDT2 = new Date(y3, mo3-1, d3, Math.floor(sm2/60), sm2%60, 0);
+  const slotH2 = Math.floor(sm2/60), slotM2 = sm2%60;
+  // Use Arizona time (MST = UTC-7, no DST)
+  const startDT2 = new Date(`${date}T${String(slotH2).padStart(2,'0')}:${String(slotM2).padStart(2,'0')}:00-07:00`);
   const endDT2   = new Date(startDT2.getTime() + (totalMins||120)*60000);
 
   // Google Calendar
@@ -457,61 +456,8 @@ app.get('/confirm/:token', async function(req, res) {
     );
   }
 
-  // Square Invoice
-  let invoiceUrl = null;
-  try {
-    const custSearch = await sq.customers.searchCustomers({
-      query: { filter: { emailAddress: { exact: buyer.email } } },
-    });
-    let custId;
-    if (custSearch.result.customers && custSearch.result.customers.length) {
-      custId = custSearch.result.customers[0].id;
-    } else {
-      const nc = await sq.customers.createCustomer({
-        givenName: buyer.firstName, familyName: buyer.lastName,
-        emailAddress: buyer.email, phoneNumber: buyer.phone,
-        idempotencyKey: uuidv4(),
-      });
-      custId = nc.result.customer.id;
-    }
-    const itemName = svcLabel + (addons.length ? ' + Add-ons' : '') + (tripCharge.apply ? ' + Trip Charge' : '');
-    const order = await sq.orders.createOrder({
-      order: {
-        locationId: process.env.SQUARE_LOCATION_ID, customerId: custId,
-        lineItems: [{
-          name: itemName,
-          quantity: '1',
-          note: address + ' — ' + date + ' @ ' + time + ' | ' + confId,
-          basePriceMoney: { amount: BigInt(finalPrice*100), currency:'USD' },
-        }],
-        referenceId: confId,
-      },
-      idempotencyKey: uuidv4(),
-    });
-    const inv = await sq.invoices.createInvoice({
-      invoice: {
-        locationId: process.env.SQUARE_LOCATION_ID,
-        orderId: order.result.order.id,
-        primaryRecipient: { customerId: custId },
-        paymentRequests: [{ requestType: 'BALANCE', dueDate: date, automaticPaymentSource: 'NONE' }],
-        deliveryMethod: 'EMAIL',
-        title: 'Inspection – ' + svcLabel,
-        description: address + '\n' + date + ' @ ' + time + '\n' + confId,
-        acceptedPaymentMethods: { card:true, bankAccount:false, squareGiftCard:false },
-      },
-      idempotencyKey: uuidv4(),
-    });
-    await sq.invoices.publishInvoice(inv.result.invoice.id, {
-      version: inv.result.invoice.version, idempotencyKey: uuidv4(),
-    });
-    invoiceUrl = inv.result.invoice.publicUrl;
-    console.log('Square invoice created');
-  } catch(e) { console.error('Square:', e.message); }
-
   // Buyer confirmation email
-  const invLine = invoiceUrl
-    ? '<p>View your Square invoice: <a href="' + invoiceUrl + '">' + invoiceUrl + '</a> — or pay in person.</p>'
-    : '<p>Payment via Square, Venmo, Zelle, or cash on inspection day.</p>';
+  const invLine = '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>';
   const tripLineBuyer = tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '';
 
   const buyerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
@@ -536,6 +482,24 @@ app.get('/confirm/:token', async function(req, res) {
     await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
     console.log('Confirmation email sent to buyer for ' + confId);
   } catch(e) { console.error('Buyer email:', e.message); }
+
+  // Buyer agent email
+  if (buyerAgent && buyerAgent.email) {
+    const baHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'      + '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'      + '<p>Hi ' + buyerAgent.name + ',</p>'      + '<p>The inspection for your buyer has been confirmed. Details below:</p>'      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'      + '</table>'      + '<p>Please confirm the seller's agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'      + '</div>';
+    try {
+      await sendEmail(buyerAgent.email, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
+      console.log('Buyer agent email sent for ' + confId);
+    } catch(e) { console.error('Buyer agent email:', e.message); }
+  }
+
+  // Seller agent email
+  if (sellerAgent && sellerAgent.email) {
+    const sellerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'      + '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'      + '<p>Hi ' + (sellerAgent.name || 'there') + ',</p>'      + '<p>A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:</p>'      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + '</td></tr>'      + '</table>'      + '<p><strong>Please ensure by inspection day:</strong></p>'      + '<ul><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'      + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>⚠️ WARNING:</strong> If utilities are NOT on, a $125 re-inspection fee will apply.</p>'      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'      + '</div>';
+    try {
+      await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml);
+      console.log('Seller agent email sent for ' + confId);
+    } catch(e) { console.error('Seller agent email:', e.message); }
+  }
 
   const tripConfirmLine = tripCharge.apply ? '<p>Trip charge of $' + TRIP_CHARGE_AMT + ' applied (' + tripCharge.miles + ' miles)</p>' : '';
 
