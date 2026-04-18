@@ -129,7 +129,7 @@ async function sendEmail(to, subject, html) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'San Tan Property Inspections <onboarding@resend.dev>',
+        from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
         to: to,
         subject: subject,
         html: html,
