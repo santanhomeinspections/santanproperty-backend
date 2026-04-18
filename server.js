@@ -9,7 +9,7 @@ const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
 const { SquareClient, SquareEnvironment } = require('square');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
 
@@ -119,13 +119,7 @@ async function checkTripCharge(address) {
 }
 
 // EMAIL
-const mailer = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_APP_PASSWORD },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
-});
+const resend = new Resend('re_QP15DwwE_BMkWn2nPJ6HT9BVRC6EBCtuG');
 
 // HEALTH
 app.get('/api/health', function(req, res){ res.json({ status:'ok', ts: new Date().toISOString() }); });
@@ -307,9 +301,9 @@ app.post('/api/book', async function(req, res) {
     + '<p style="color:#888;font-size:.8rem">Texts will NOT go out until you tap Confirm.</p>'
     + '</div>';
 
-  // Fire and forget — don't await so email doesn't block the response
-  mailer.sendMail({
-    from: '"San Tan Booking" <' + process.env.EMAIL_USER + '>',
+  // Fire and forget — owner alert email via Resend
+  resend.emails.send({
+    from: 'San Tan Booking <onboarding@resend.dev>',
     to: process.env.OWNER_EMAIL,
     subject: 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time,
     html: ownerHtml,
@@ -521,8 +515,8 @@ app.get('/confirm/:token', async function(req, res) {
     + '</div>';
 
   try {
-    await mailer.sendMail({
-      from: '"San Tan Property Inspections" <' + process.env.EMAIL_USER + '>',
+    await resend.emails.send({
+      from: 'San Tan Property Inspections <onboarding@resend.dev>',
       to: buyer.email,
       subject: 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']',
       html: buyerHtml,
