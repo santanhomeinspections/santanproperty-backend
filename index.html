@@ -718,7 +718,7 @@ const SQFT_LBL={1000:'≤ 1,000 sq ft',1500:'1,001–1,500',2000:'1,501–2,000'
 const INSP_LBL={'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection','new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection'};
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const ALL_SLOTS=['8:00 AM','9:00 AM','10:00 AM','11:00 AM','1:00 PM','2:00 PM','3:00 PM'];
+const ALL_SLOTS=['8:00 AM','8:30 AM','9:00 AM','9:30 AM','10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','1:00 PM','1:30 PM','2:00 PM','2:30 PM','3:00 PM'];
 const API='https://santanproperty-backend-production.up.railway.app/api';
 
 let BD={sqft:'',yr:0,type:'',addr:'',baseP:0,baseM:0,addons:[],totalP:0,totalM:0,date:null,dateStr:'',time:'',endTime:'',buyer:{},ba:{},sa:{},notes:''};
@@ -842,7 +842,7 @@ async function pickDay(y,mo,d){
     grid.innerHTML='<div class="cal-load" style="grid-column:1/-1;color:var(--warm-gray)">This day is unavailable for bookings.</div>';
     return;
   }
-  grid.innerHTML=ALL_SLOTS.filter(t=>!(isRedDay&&t==='8:00 AM')).map(t=>{
+  grid.innerHTML=ALL_SLOTS.filter(t=>!(isRedDay&&(t==='8:00 AM'||t==='8:30 AM'))).map(t=>{
     const bk=booked.includes(t);
     const end=addMins(t,dur);
     return`<div class="ts${bk?' booked':''}" ${!bk?`onclick="pickTime(this,'${t}','${end}')"`:''}>${t}<span class="et">${bk?'Taken':'ends ~'+end}</span></div>`;
