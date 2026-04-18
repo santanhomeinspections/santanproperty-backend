@@ -1,6 +1,6 @@
 {
   "name": "santanproperty-backend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "San Tan Property Inspections \u2014 Booking Backend",
   "main": "server.js",
   "scripts": {
