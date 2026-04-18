@@ -9,7 +9,7 @@ const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
 const { SquareClient, SquareEnvironment } = require('square');
-const { Resend } = require('resend');
+// Email via Resend API (no package needed)
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
 
@@ -119,7 +119,29 @@ async function checkTripCharge(address) {
 }
 
 // EMAIL
-const resend = new Resend('re_QP15DwwE_BMkWn2nPJ6HT9BVRC6EBCtuG');
+// Send email via Resend REST API
+async function sendEmail(to, subject, html) {
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer re_QP15DwwE_BMkWn2nPJ6HT9BVRC6EBCtuG',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'San Tan Property Inspections <onboarding@resend.dev>',
+        to: to,
+        subject: subject,
+        html: html,
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+    return data;
+  } catch(e) {
+    throw e;
+  }
+}
 
 // HEALTH
 app.get('/api/health', function(req, res){ res.json({ status:'ok', ts: new Date().toISOString() }); });
@@ -301,13 +323,9 @@ app.post('/api/book', async function(req, res) {
     + '<p style="color:#888;font-size:.8rem">Texts will NOT go out until you tap Confirm.</p>'
     + '</div>';
 
-  // Fire and forget — owner alert email via Resend
-  resend.emails.send({
-    from: 'San Tan Booking <onboarding@resend.dev>',
-    to: process.env.OWNER_EMAIL,
-    subject: 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time,
-    html: ownerHtml,
-  }).then(function(){ console.log('Owner alert sent for ' + confId); })
+  // Fire and forget — owner alert email
+  sendEmail(process.env.OWNER_EMAIL, 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time, ownerHtml)
+    .then(function(){ console.log('Owner alert sent for ' + confId); })
     .catch(function(e){ console.error('Owner alert email:', e.message); });
 
   // Send response immediately
@@ -515,12 +533,7 @@ app.get('/confirm/:token', async function(req, res) {
     + '</div>';
 
   try {
-    await resend.emails.send({
-      from: 'San Tan Property Inspections <onboarding@resend.dev>',
-      to: buyer.email,
-      subject: 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']',
-      html: buyerHtml,
-    });
+    await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
     console.log('Confirmation email sent to buyer for ' + confId);
   } catch(e) { console.error('Buyer email:', e.message); }
 
