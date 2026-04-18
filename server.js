@@ -37,7 +37,8 @@ const oAuth2Client = new google.auth.OAuth2(
 );
 oAuth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
 const calendar   = google.calendar({ version: 'v3', auth: oAuth2Client });
-const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
+const CALENDAR_ID       = process.env.GOOGLE_CALENDAR_ID || 'primary';
+const BLOCK_CALENDAR_ID = '21fd9f285b32f1b290a601236f376d2495c6c0a363d4224bce7c0bc4aca7e65b@group.calendar.google.com';
 const TIMEZONE    = 'America/Phoenix';
 const ALL_SLOTS   = ['8:00 AM','9:00 AM','10:00 AM','11:00 AM','1:00 PM','2:00 PM','3:00 PM'];
 
@@ -134,23 +135,53 @@ app.get('/api/availability', async function(req, res) {
   try {
     const parts = date.split('-').map(Number);
     const y = parts[0], mo = parts[1], d = parts[2];
-    const resp = await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: new Date(y, mo-1, d, 0,  0,  0).toISOString(),
-      timeMax: new Date(y, mo-1, d, 23, 59, 59).toISOString(),
-      singleEvents: true, orderBy: 'startTime',
+    const timeMin = new Date(y, mo-1, d, 0,  0,  0).toISOString();
+    const timeMax = new Date(y, mo-1, d, 23, 59, 59).toISOString();
+
+    // Fetch both calendars in parallel
+    const [mainResp, blockResp] = await Promise.all([
+      calendar.events.list({ calendarId: CALENDAR_ID,       timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
+      calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
+    ]);
+
+    const allItems = [
+      ...(mainResp.data.items  || []),
+      ...(blockResp.data.items || []),
+    ];
+
+    // Check if any event is all-day (blocks entire day)
+    const dayBlocked = allItems.some(function(ev) {
+      return ev.start && ev.start.date && !ev.start.dateTime;
     });
-    const booked = [];
-    const items = resp.data.items || [];
-    for (let i = 0; i < items.length; i++) {
-      const ev = items[i];
-      if (!ev.start || !ev.start.dateTime) continue;
-      const dt = new Date(ev.start.dateTime);
-      const h=dt.getHours(), m=dt.getMinutes(), p=h>=12?'PM':'AM';
-      const dh=h>12?h-12:h===0?12:h;
-      const slot=dh+':'+(m<10?'0':'')+m+' '+p;
-      if (ALL_SLOTS.includes(slot)) booked.push(slot);
+
+    if (dayBlocked) {
+      return res.json({ date: date, booked: ALL_SLOTS, available: [], dayBlocked: true });
     }
+
+    // Collect booked slots from timed events
+    const booked = [];
+    for (let i = 0; i < allItems.length; i++) {
+      const ev = allItems[i];
+      if (!ev.start || !ev.start.dateTime) continue;
+      const evStart = new Date(ev.start.dateTime);
+      const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : null;
+
+      for (let s = 0; s < ALL_SLOTS.length; s++) {
+        const slot = ALL_SLOTS[s];
+        const slotMins = slotToMins(slot);
+        const slotH = Math.floor(slotMins / 60);
+        const slotM = slotMins % 60;
+        const slotStart = new Date(y, mo-1, d, slotH, slotM, 0);
+
+        // Block slot if: event starts exactly at slot, OR event spans across slot start
+        const startsAtSlot = evStart.getHours() === slotH && evStart.getMinutes() === slotM;
+        const spansSlot    = evEnd && evStart <= slotStart && evEnd > slotStart;
+        if ((startsAtSlot || spansSlot) && !booked.includes(slot)) {
+          booked.push(slot);
+        }
+      }
+    }
+
     res.json({ date: date, booked: booked, available: ALL_SLOTS.filter(function(s){ return !booked.includes(s); }) });
   } catch (e) {
     console.error('Availability:', e.message);
