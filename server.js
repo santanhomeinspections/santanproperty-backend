@@ -122,6 +122,9 @@ async function checkTripCharge(address) {
 const mailer = nodemailer.createTransport({
   service: 'gmail',
   auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_APP_PASSWORD },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
 });
 
 // HEALTH
@@ -304,22 +307,31 @@ app.post('/api/book', async function(req, res) {
     + '<p style="color:#888;font-size:.8rem">Texts will NOT go out until you tap Confirm.</p>'
     + '</div>';
 
-  try {
-    await mailer.sendMail({
-      from: '"San Tan Booking" <' + process.env.EMAIL_USER + '>',
-      to: process.env.OWNER_EMAIL,
-      subject: 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time,
-      html: ownerHtml,
-    });
-    console.log('Owner alert sent for ' + confId);
-  } catch(e) { console.error('Owner alert email:', e.message); }
+  // Fire and forget — don't await so email doesn't block the response
+  mailer.sendMail({
+    from: '"San Tan Booking" <' + process.env.EMAIL_USER + '>',
+    to: process.env.OWNER_EMAIL,
+    subject: 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time,
+    html: ownerHtml,
+  }).then(function(){ console.log('Owner alert sent for ' + confId); })
+    .catch(function(e){ console.error('Owner alert email:', e.message); });
 
-  // Text owner
-  await sms(process.env.OWNER_PHONE,
-    'NEW BOOKING REQUEST\n' + fullName + '\n' + address + '\n' + dateFmt + ' @ ' + time + '\n$' + finalPrice + (trip.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '') + '\n\nCheck your email to confirm.'
-  );
-
+  // Send response immediately
   res.json({ success: true, confirmationId: confId, message: 'Request received! You will be confirmed shortly.' });
+
+  // Text owner with booking summary + confirm/cancel links (non-blocking)
+  const ownerSmsBody =
+    'NEW BOOKING — ' + confId + '\n' +
+    fullName + '\n' +
+    address + '\n' +
+    dateFmt + ' @ ' + time + '\n' +
+    svcLabel + '\n' +
+    '$' + finalPrice + (trip.apply ? ' (incl. trip charge)' : '') + '\n\n' +
+    'CONFIRM:\n' + confirmUrl + '\n\n' +
+    'CANCEL:\n' + cancelUrl;
+
+  sms(process.env.OWNER_PHONE, ownerSmsBody)
+    .catch(function(e){ console.error('Owner SMS:', e.message); });
 });
 
 // CONFIRM BOOKING
