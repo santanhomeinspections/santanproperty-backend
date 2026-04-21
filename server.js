@@ -49,9 +49,12 @@ async function initDb() {
         id           SERIAL PRIMARY KEY,
         conf_id      TEXT UNIQUE NOT NULL,
         data         JSONB NOT NULL,
-        confirmed_at TIMESTAMPTZ DEFAULT NOW()
+        confirmed_at TIMESTAMPTZ DEFAULT NOW(),
+        paid_at      TIMESTAMPTZ DEFAULT NULL
       )
     `);
+    // Add paid_at column if it doesn't exist (for existing deployments)
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -62,6 +65,18 @@ async function initDb() {
         message      TEXT,
         requested_at TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS discount_codes (
+        code        TEXT PRIMARY KEY,
+        pct         INTEGER NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Seed default codes if table is empty
+    await pool.query(`
+      INSERT INTO discount_codes (code, pct) VALUES ('SAVE10', 10), ('SAVE20', 20)
+      ON CONFLICT (code) DO NOTHING
     `);
     await pool.query(`DELETE FROM pending_bookings WHERE created_at < NOW() - INTERVAL '48 hours'`);
     console.log('DB ready');
@@ -416,6 +431,11 @@ app.get('/confirm/:token', async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
     + '</table>'
     + '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>'
+    + (addons.includes('Termite Inspection (WDO)') ? '<p style="font-size:.83rem;color:#666;margin-top:8px">🐛 <strong>Note on termite inspection:</strong> The WDO/termite inspection is performed under a separate licensed pest control company. You will receive two reports — one from San Tan Property Inspections and a separate WDO report.</p>' : '')
+    + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0">'
+    + '<p style="margin:0 0 4px;font-size:.85rem"><strong style="color:#1B2D52">📋 Inspection Agreement</strong></p>'
+    + '<p style="margin:0;font-size:.82rem;color:#555;line-height:1.6">You will receive a copy of our Inspection Agreement before your appointment. Please review and sign it prior to the inspection. You can also <a href=\"https://santanpropertyinspections.com/SanTan_Inspection_Agreement.docx\" style=\"color:#1B2D52;font-weight:600\">download it here</a> to review in advance.</p>'
+    + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
     + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
     + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
@@ -622,6 +642,37 @@ app.post('/sms/reply', express.urlencoded({ extended: false }), async function(r
   res.send('<Response></Response>');
 });
 
+// ── CONTACT FORM ─────────────────────────────────────────────
+app.post('/api/contact', async function(req, res) {
+  const { name, phone, email, role, message } = req.body;
+  if (!name || !email || !message) return res.status(400).json({ error: 'Name, email, and message are required.' });
+
+  const roleLabel = {
+    'buyer': 'Buyer / Homeowner',
+    'agent': "Buyer's Agent",
+    'seller': 'Seller / Listing Agent',
+    'other': 'Other'
+  }[role] || role || 'Not specified';
+
+  const html = '<div style="font-family:Arial,sans-serif;max-width:520px">'
+    + '<h2 style="color:#1B2D52">New Contact Form Submission</h2>'
+    + '<p><b>Name:</b> ' + name + '</p>'
+    + '<p><b>Role:</b> ' + roleLabel + '</p>'
+    + (phone ? '<p><b>Phone:</b> ' + phone + '</p>' : '')
+    + '<p><b>Email:</b> ' + email + '</p>'
+    + '<p><b>Message:</b></p><p style="background:#FAF7F0;padding:12px;border-radius:6px;border-left:4px solid #C9A84C">' + message + '</p>'
+    + '<p style="color:#888;font-size:.85rem;margin-top:16px">Reply directly to this email to respond to ' + name + '.</p>'
+    + '</div>';
+
+  try {
+    await sendEmail(process.env.OWNER_EMAIL, 'CONTACT: ' + name + ' (' + roleLabel + ')', html);
+    res.json({ success: true });
+  } catch(e) {
+    console.error('Contact form email:', e.message);
+    res.status(500).json({ error: 'Could not send message. Please call or email directly.' });
+  }
+});
+
 // ── RESCHEDULE REQUEST ───────────────────────────────────────
 app.post('/api/reschedule', async function(req, res) {
   const { confId, name, phone, email, message } = req.body;
@@ -710,6 +761,20 @@ tr:hover td{background:rgba(201,168,76,.04);}
 </nav>
 <div class="wrap">
   <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
+  <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+    <a href="/admin/csv" style="background:#C9A84C;color:#0F1C35;font-weight:700;font-size:.82rem;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block;">⬇ Export CSV</a>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-hd"><h2>Discount Codes</h2></div>
+    <div style="padding:16px 20px;border-bottom:1px solid #243660;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="newCode" placeholder="Code (e.g. AGENT15)" style="background:#243660;border:1px solid #344870;color:#fff;padding:8px 12px;border-radius:6px;font-size:.83rem;width:160px;outline:none"/>
+      <input id="newPct" placeholder="% off" type="number" min="1" max="100" style="background:#243660;border:1px solid #344870;color:#fff;padding:8px 12px;border-radius:6px;font-size:.83rem;width:80px;outline:none"/>
+      <button onclick="addCode()" style="background:#C9A84C;color:#0F1C35;border:none;border-radius:6px;padding:8px 18px;font-weight:700;font-size:.83rem;cursor:pointer">Add Code</button>
+    </div>
+    <div id="codeList"><div class="empty">Loading...</div></div>
+  </div>
+
   <div class="card">
     <div class="card-hd"><h2>Confirmed Bookings</h2><span id="bookingCount">—</span></div>
     <div id="bookingTable"><div class="empty">Loading...</div></div>
@@ -736,12 +801,19 @@ async function load() {
     d.bookings.forEach(function(b){ const n=b.data.buyerAgent&&b.data.buyerAgent.name?b.data.buyerAgent.name:'Unknown'; agentCount[n]=(agentCount[n]||0)+1; });
     const topAgent = Object.entries(agentCount).sort(function(a,b){return b[1]-a[1];})[0];
 
+    const paidRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
+    const unpaidCount = d.bookings.filter(function(b){ return !b.paid_at; }).length;
     document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+d.bookings.length+'</div><div class="sub">all time</div></div>' +
       '<div class="stat"><div class="lbl">Total Revenue</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">all time</div></div>' +
+      '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+(d.bookings.filter(function(b){return b.paid_at;}).length)+' jobs paid</div></div>' +
       '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' revenue</div></div>' +
       '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
+      '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
       '<div class="stat"><div class="lbl">Pending Reschedules</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
+
+    // Discount codes
+    renderCodes(d.codes || []);
 
     // Bookings table
     document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
@@ -754,15 +826,19 @@ async function load() {
         const discBadge = bd.discountCode ? '<span class="badge badge-disc">'+bd.discountCode+'</span> ' : '';
         const tripBadge = bd.tripCharge&&bd.tripCharge.apply ? '<span class="badge badge-trip">trip</span> ' : '';
         const addons = bd.addons&&bd.addons.length ? bd.addons.join(', ') : '—';
+        const isPaid = !!b.paid_at;
+        const paidBtn = isPaid
+          ? '<button onclick="markUnpaid(''+bd.confId+'')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">✓ Paid — Undo</button>'
+          : '<button onclick="markPaid(''+bd.confId+'')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
           '<td><div class="agent">'+(bd.buyerAgent?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div>'+paidBtn+'</td>' +
           '</tr>';
       }).join('');
-      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Paid</th></tr></thead><tbody>'+rows+'</tbody></table>';
     }
 
     // Reschedule table
@@ -787,11 +863,166 @@ async function load() {
     console.error(e);
   }
 }
+
+async function markPaid(confId) {
+  await fetch('/admin/mark-paid', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  load();
+}
+async function markUnpaid(confId) {
+  if (!confirm('Mark as unpaid?')) return;
+  await fetch('/admin/mark-unpaid', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  load();
+}
+
+function renderCodes(codes) {
+  const el = document.getElementById('codeList');
+  if (!codes.length) { el.innerHTML = '<div class="empty">No active codes.</div>'; return; }
+  el.innerHTML = '<table><thead><tr><th>Code</th><th>Discount</th><th>Action</th></tr></thead><tbody>' +
+    codes.map(function(c) {
+      return '<tr><td><span class="conf">'+c.code+'</span></td><td class="price">'+c.pct+'% off</td>' +
+        '<td><button onclick="deleteCode(''+c.code+'')" style="background:#C0392B;color:white;border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font-size:.75rem">Remove</button></td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+async function addCode() {
+  const code = document.getElementById('newCode').value.trim().toUpperCase();
+  const pct  = document.getElementById('newPct').value.trim();
+  if (!code || !pct) { alert('Enter both a code and a percentage.'); return; }
+  await fetch('/admin/codes/add', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({code,pct}) });
+  document.getElementById('newCode').value='';
+  document.getElementById('newPct').value='';
+  load();
+}
+
+async function deleteCode(code) {
+  if (!confirm('Remove code ' + code + '?')) return;
+  await fetch('/admin/codes/delete', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({code}) });
+  load();
+}
+
 load();
 setInterval(load, 60000);
 </script>
 </body>
 </html>`);
+});
+
+app.post('/admin/mark-paid', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+  try {
+    await pool.query('UPDATE confirmed_bookings SET paid_at = NOW() WHERE conf_id = $1', [confId]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/admin/mark-unpaid', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId } = req.body;
+  try {
+    await pool.query('UPDATE confirmed_bookings SET paid_at = NULL WHERE conf_id = $1', [confId]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/admin/csv', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  try {
+    const result = await pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC');
+    const rows = result.rows;
+    const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Seller Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid'];
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      const d = row.data;
+      const escape = (v) => '"' + String(v||'').replace(/"/g,'""') + '"';
+      lines.push([
+        escape(d.confId),
+        escape(new Date(row.confirmed_at).toLocaleDateString('en-US')),
+        escape(d.dateFmt||''),
+        escape(d.time||''),
+        escape(d.fullName||''),
+        escape(d.buyer&&d.buyer.phone?d.buyer.phone:''),
+        escape(d.buyer&&d.buyer.email?d.buyer.email:''),
+        escape(d.address||''),
+        escape(d.svcLabel||''),
+        escape(d.addonsLine||''),
+        escape(d.buyerAgent&&d.buyerAgent.name?d.buyerAgent.name:''),
+        escape(d.buyerAgent&&d.buyerAgent.phone?d.buyerAgent.phone:''),
+        escape(d.sellerAgent&&d.sellerAgent.name?d.sellerAgent.name:''),
+        escape(d.sqft||''),
+        escape(d.yearBuilt||''),
+        escape(d.totalPrice||''),
+        escape(d.finalPrice||''),
+        escape(d.discountCode||''),
+        escape(d.discountAmount||''),
+        escape(d.tripCharge&&d.tripCharge.apply?'Yes':'No'),
+        escape(d.notes||''),
+        escape(row.paid_at ? 'Yes' : 'No'),
+        escape(row.paid_at ? new Date(row.paid_at).toLocaleDateString('en-US') : ''),
+      ].join(','));
+    }
+    res.set('Content-Type', 'text/csv');
+    res.set('Content-Disposition', 'attachment; filename="santan_bookings_' + new Date().toISOString().slice(0,10) + '.csv"');
+    res.send(lines.join('\n'));
+  } catch(e) {
+    console.error('CSV export:', e.message);
+    res.status(500).send('Error generating CSV');
+  }
+});
+
+// ── DISCOUNT CODE MANAGER ─────────────────────────────────────
+// Codes stored in DB so they can be managed from dashboard
+async function getDiscountCodes() {
+  try {
+    const r = await pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC');
+    return r.rows;
+  } catch(e) {
+    // Table may not exist yet — return defaults
+    return [];
+  }
+}
+
+app.post('/admin/codes/add', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  const { code, pct } = req.body;
+  if (!code || !pct || isNaN(pct) || pct < 1 || pct > 100) return res.status(400).json({ error: 'Invalid code or percentage' });
+  try {
+    await pool.query('INSERT INTO discount_codes (code, pct) VALUES ($1, $2) ON CONFLICT (code) DO UPDATE SET pct = $2', [code.toUpperCase().trim(), parseInt(pct)]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/admin/codes/delete', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  const { code } = req.body;
+  try {
+    await pool.query('DELETE FROM discount_codes WHERE code = $1', [code]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/validate-code', async function(req, res) {
+  const code = (req.query.code || '').toUpperCase().trim();
+  if (!code) return res.status(400).json({ error: 'No code provided' });
+  try {
+    const r = await pool.query('SELECT pct FROM discount_codes WHERE code = $1', [code]);
+    if (r.rows.length) return res.json({ valid: true, pct: r.rows[0].pct });
+    return res.json({ valid: false });
+  } catch(e) { return res.json({ valid: false }); }
 });
 
 app.get('/admin/data', async function(req, res) {
@@ -802,11 +1033,12 @@ app.get('/admin/data', async function(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const [bookings, reschedules] = await Promise.all([
+    const [bookings, reschedules, codes] = await Promise.all([
       pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
+      pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
     ]);
-    res.json({ bookings: bookings.rows, reschedules: reschedules.rows });
+    res.json({ bookings: bookings.rows, reschedules: reschedules.rows, codes: codes.rows });
   } catch(e) {
     console.error('Admin data:', e.message);
     res.status(500).json({ error: 'DB error' });
