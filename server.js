@@ -127,9 +127,8 @@ app.get('/api/availability', async function(req, res) {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
 
-  // Duration in minutes passed from frontend (BD.totalM), fallback to max possible
-  const inspDuration = parseInt(req.query.duration) || 360; // default 6hrs if unknown
-  const BUFFER_MINS  = 120; // 2 hour buffer after inspection ends
+  const inspDuration = parseInt(req.query.duration) || 360;
+  const BUFFER_MINS  = 120;
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
   try {
@@ -152,7 +151,6 @@ app.get('/api/availability', async function(req, res) {
       const slotMins = slotToMins(slot);
       const slotH = Math.floor(slotMins/60), slotM = slotMins%60;
       const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
-      // Window that must stay clear: slot start → slot start + inspection duration + 2hr buffer
       const slotWindowEnd = new Date(slotStart.getTime() + totalBlockMins * 60000);
 
       for (let i = 0; i < allItems.length; i++) {
@@ -161,9 +159,6 @@ app.get('/api/availability', async function(req, res) {
         const evStart = new Date(ev.start.dateTime);
         const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
 
-        // Block this slot if:
-        // 1. An event starts inside the inspection+buffer window
-        // 2. An event ends after the slot starts (event overlaps slot itself)
         const eventStartsInWindow = evStart >= slotStart && evStart < slotWindowEnd;
         const eventOverlapsSlot   = evStart <= slotStart && evEnd > slotStart;
 
@@ -185,6 +180,10 @@ app.post('/api/book', async function(req, res) {
   const b = req.body;
   const { address, sqft, yearBuilt, inspType, totalPrice, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
   const addons = b.addons || [];
+  const extraEmails = (b.extraEmails || []).filter(function(e){ return e && e.trim(); });
+  const discountCode   = b.discountCode   || null;
+  const discountPct    = b.discountPct    || null;
+  const discountAmount = b.discountAmount || null;
 
   const miss=[];
   if(!address) miss.push('address');
@@ -223,7 +222,7 @@ app.post('/api/book', async function(req, res) {
   const trip = await checkTripCharge(address);
   const finalPrice = trip.apply ? totalPrice + TRIP_CHARGE_AMT : totalPrice;
 
-  pendingBookings.set(token, { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, tripCharge: trip, createdAt: Date.now() });
+  pendingBookings.set(token, { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, createdAt: Date.now() });
 
   const BASE_URL   = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
   const confirmUrl = BASE_URL + '/confirm/' + token;
@@ -232,6 +231,8 @@ app.post('/api/book', async function(req, res) {
   const sellerLineOwner = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + '<br>Phone: ' + (sellerAgent.phone||'—') + '</p>' : '';
   const tripLineOwner   = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + trip.miles + ' miles)</p>' : '';
   const notesLineOwner  = notes ? '<p><b>Notes:</b> ' + notes + '</p>' : '';
+  const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + extraEmails.join(', ') + '</p>' : '';
+  const discountLineOwner = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')</p>' : '';
 
   const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:560px">'
     + '<h2>New Booking Request — ' + confId + '</h2>'
@@ -242,7 +243,7 @@ app.post('/api/book', async function(req, res) {
     + '<hr/>'
     + '<p><b>Buyer:</b> ' + fullName + '<br>Phone: ' + buyer.phone + '<br>Email: ' + buyer.email + '</p>'
     + '<p><b>Buyer Agent:</b> ' + buyerAgent.name + (buyerAgent.brokerage ? ' — ' + buyerAgent.brokerage : '') + '<br>Phone: ' + buyerAgent.phone + '</p>'
-    + sellerLineOwner + notesLineOwner + tripLineOwner
+    + sellerLineOwner + notesLineOwner + extraEmailsLineOwner + discountLineOwner + tripLineOwner
     + '<div style="margin:28px 0">'
     + '<a href="' + confirmUrl + '" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CONFIRM AND SEND TEXTS</a>'
     + '&nbsp;&nbsp;'
@@ -265,7 +266,7 @@ app.get('/confirm/:token', async function(req, res) {
   const booking = pendingBookings.get(req.params.token);
   if (!booking) return res.send('<h2>This confirmation link has expired or already been used.</h2>');
 
-  const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, tripCharge } = booking;
+  const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge } = booking;
   pendingBookings.delete(req.params.token);
 
   const sm2 = slotToMins(time);
@@ -284,6 +285,8 @@ app.get('/confirm/:token', async function(req, res) {
       'BUYERS AGENT: ' + buyerAgent.name + (buyerAgent.brokerage ? ' — ' + buyerAgent.brokerage : '') + ' | ' + buyerAgent.phone,
       sellerAgent && sellerAgent.name ? 'SELLERS AGENT: ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + ' | ' + (sellerAgent.phone||'—') : null,
       notes ? 'Notes: ' + notes : null,
+      extraEmails && extraEmails.length ? 'Extra report recipients: ' + extraEmails.join(', ') : null,
+      discountCode ? 'Discount: ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')' : null,
     ].filter(Boolean).join('\n');
 
     const ev = {
@@ -304,7 +307,7 @@ app.get('/confirm/:token', async function(req, res) {
   );
 
   await sms(buyerAgent.phone,
-    'Hi ' + buyerAgent.name + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with sellers agent:\n- Sellers agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+    'Hi ' + buyerAgent.name + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
 
   if (sellerAgent && sellerAgent.phone) {
@@ -336,6 +339,33 @@ app.get('/confirm/:token', async function(req, res) {
   try {
     await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
   } catch(e) { console.error('Buyer email:', e.message); }
+
+  // Send confirmation email to extra report recipients
+  if (extraEmails && extraEmails.length) {
+    const extraHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+      + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
+      + '<p>You have been added as a report recipient for the following inspection:</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
+      + '</table>'
+      + '<p>The inspection report will be delivered the <strong>same day</strong> as the inspection.</p>'
+      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
+      + '</div>';
+
+    for (const email of extraEmails) {
+      try {
+        await sendEmail(email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', extraHtml);
+        console.log('Extra recipient email sent to ' + email);
+      } catch(e) { console.error('Extra recipient email to ' + email + ':', e.message); }
+    }
+  }
 
   if (buyerAgent && buyerAgent.email) {
     const baHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
