@@ -235,12 +235,19 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   .fr2{grid-template-columns:1fr;}
   .tgrid{grid-template-columns:repeat(2,1fr);}
   .wiz-body{padding:22px 18px;}
+  #calLayout{grid-template-columns:1fr!important;}
+  #calLayout>div:first-child{min-width:unset!important;width:100%!important;}
+  .cal-days .cd{font-size:.82rem;}
 }
 @media(max-width:480px){
   .tgrid{grid-template-columns:repeat(2,1fr);}
   .ac-grid{grid-template-columns:1fr;}
   .ps{font-size:.58rem;padding:11px 3px;}
   .price-grid{grid-template-columns:repeat(2,1fr);}
+  .cal{padding:10px;}
+  .cal-days .cd{font-size:.75rem;}
+  .wiz-body{padding:16px 14px;}
+  .fr2{grid-template-columns:1fr;}
 }
 
 /* Discount code */
@@ -448,8 +455,8 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
         <div class="wpanel" id="wp4">
           <div class="wsec-title">Choose a Date &amp; Time</div>
           <div class="wsec-sub">Available Monday – Saturday. Select a date to see open slots from our live calendar.</div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:start">
-            <div style="min-width:240px">
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:start" id="calLayout">
+            <div style="min-width:240px;width:100%">
               <div class="cal">
                 <div class="cal-hdr">
                   <button class="cal-nav" onclick="prevMo()" type="button">&#8249;</button>
