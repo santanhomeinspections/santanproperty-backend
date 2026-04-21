@@ -44,7 +44,25 @@ async function initDb() {
         created_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    // Clean up anything older than 48 hours on startup
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS confirmed_bookings (
+        id           SERIAL PRIMARY KEY,
+        conf_id      TEXT UNIQUE NOT NULL,
+        data         JSONB NOT NULL,
+        confirmed_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reschedule_requests (
+        id           SERIAL PRIMARY KEY,
+        conf_id      TEXT,
+        name         TEXT,
+        phone        TEXT,
+        email        TEXT,
+        message      TEXT,
+        requested_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     await pool.query(`DELETE FROM pending_bookings WHERE created_at < NOW() - INTERVAL '48 hours'`);
     console.log('DB ready');
   } catch (e) {
@@ -356,6 +374,14 @@ app.get('/confirm/:token', async function(req, res) {
     const r = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: ev, sendUpdates:'all' });
     calId = r.data.id;
     console.log('Calendar event created: ' + calId);
+
+    // Save to confirmed_bookings for dashboard
+    try {
+      await pool.query(
+        'INSERT INTO confirmed_bookings (conf_id, data) VALUES ($1, $2) ON CONFLICT (conf_id) DO NOTHING',
+        [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() })]
+      );
+    } catch(e) { console.error('DB confirmed save:', e.message); }
   } catch(e) { console.error('Calendar:', e.message); }
 
   await sms(buyer.phone,
@@ -388,6 +414,18 @@ app.get('/confirm/:token', async function(req, res) {
     + '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
     + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+    + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+    + '<div style="background:#FAF7F0;border-radius:8px;padding:16px;margin-top:8px">'
+    + '<p style="font-size:.82rem;color:#8C7B6B;margin-bottom:10px"><strong style="color:#1B2D52">Need to reschedule?</strong> Fill out the form below and Jaren will reach out to find a new time.</p>'
+    + '<form action="https://santanproperty-backend-production.up.railway.app/api/reschedule" method="POST" style="display:flex;flex-direction:column;gap:8px">'
+    + '<input type="hidden" name="confId" value="' + confId + '"/>'
+    + '<input type="hidden" name="name" value="' + buyer.firstName + ' ' + buyer.lastName + '"/>'
+    + '<input type="hidden" name="phone" value="' + buyer.phone + '"/>'
+    + '<input type="hidden" name="email" value="' + buyer.email + '"/>'
+    + '<textarea name="message" rows="2" placeholder="Preferred dates/times or reason for rescheduling..." style="padding:8px;border:1px solid #E2D9C8;border-radius:6px;font-family:Georgia,serif;font-size:.83rem;resize:vertical"></textarea>'
+    + '<button type="submit" style="background:#1B2D52;color:white;padding:9px 20px;border:none;border-radius:6px;font-size:.83rem;font-weight:700;cursor:pointer;align-self:flex-start">Request Reschedule</button>'
+    + '</form>'
+    + '</div>'
     + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
     + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
     + '</div>';
@@ -510,6 +548,197 @@ app.post('/sms/reply', express.urlencoded({ extended: false }), async function(r
   if (process.env.OWNER_PHONE) await sms(process.env.OWNER_PHONE, 'Reply from ' + from + ':\n' + body);
   res.set('Content-Type', 'text/xml');
   res.send('<Response></Response>');
+});
+
+// ── RESCHEDULE REQUEST ───────────────────────────────────────
+app.post('/api/reschedule', async function(req, res) {
+  const { confId, name, phone, email, message } = req.body;
+  if (!name || !email) return res.status(400).json({ error: 'Name and email required.' });
+
+  try {
+    await pool.query(
+      'INSERT INTO reschedule_requests (conf_id, name, phone, email, message) VALUES ($1,$2,$3,$4,$5)',
+      [confId||null, name, phone||null, email, message||null]
+    );
+  } catch(e) { console.error('Reschedule DB:', e.message); }
+
+  const rHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
+    + '<h2 style="color:#1B2D52">Reschedule Request</h2>'
+    + '<p><b>From:</b> ' + name + '</p>'
+    + (confId ? '<p><b>Conf #:</b> ' + confId + '</p>' : '')
+    + (phone ? '<p><b>Phone:</b> ' + phone + '</p>' : '')
+    + '<p><b>Email:</b> ' + email + '</p>'
+    + (message ? '<p><b>Message:</b> ' + message + '</p>' : '')
+    + '<p style="color:#888;font-size:.85rem">Reply to this email or call/text the client to reschedule.</p>'
+    + '</div>';
+
+  try {
+    await sendEmail(process.env.OWNER_EMAIL, 'RESCHEDULE REQUEST: ' + name + (confId ? ' [' + confId + ']' : ''), rHtml);
+  } catch(e) { console.error('Reschedule email:', e.message); }
+
+  res.json({ success: true });
+});
+
+// ── ADMIN DASHBOARD ───────────────────────────────────────────
+const ADMIN_PASSWORD = 'monroe';
+
+app.get('/admin', function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>San Tan Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;color:#BEC8D8;min-height:100vh;}
+nav{background:#0a1428;border-bottom:2px solid #C9A84C;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}
+nav h1{font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:1px;text-transform:uppercase;}
+nav span{font-size:.78rem;color:#4A5A7A;}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 20px;}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:28px;}
+.stat{background:#1B2D52;border-radius:10px;padding:18px 20px;}
+.stat .lbl{font-size:.72rem;text-transform:uppercase;letter-spacing:1px;color:#4A5A7A;margin-bottom:6px;}
+.stat .val{font-size:1.7rem;font-weight:700;color:#C9A84C;}
+.stat .sub{font-size:.75rem;color:#4A5A7A;margin-top:3px;}
+.card{background:#1B2D52;border-radius:10px;overflow:hidden;margin-bottom:20px;}
+.card-hd{padding:14px 20px;border-bottom:1px solid #243660;display:flex;align-items:center;justify-content:space-between;}
+.card-hd h2{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#C9A84C;}
+.card-hd span{font-size:.75rem;color:#4A5A7A;}
+table{width:100%;border-collapse:collapse;}
+th{padding:10px 16px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#4A5A7A;border-bottom:1px solid #243660;white-space:nowrap;}
+td{padding:12px 16px;font-size:.83rem;border-bottom:1px solid #162240;vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:rgba(201,168,76,.04);}
+.conf{color:#C9A84C;font-weight:700;font-size:.75rem;}
+.name{color:#fff;font-weight:600;}
+.addr{color:#8A9AB5;font-size:.78rem;margin-top:2px;}
+.svc{font-size:.75rem;color:#8A9AB5;}
+.price{color:#C9A84C;font-weight:700;}
+.agent{font-size:.78rem;color:#8A9AB5;}
+.empty{padding:32px;text-align:center;color:#4A5A7A;font-size:.85rem;}
+.badge{display:inline-block;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.5px;}
+.badge-disc{background:rgba(26,180,100,.15);color:#1ab464;}
+.badge-trip{background:rgba(201,168,76,.15);color:#C9A84C;}
+.resc-msg{font-size:.78rem;color:#8A9AB5;margin-top:3px;font-style:italic;}
+@media(max-width:600px){th:nth-child(4),td:nth-child(4),th:nth-child(5),td:nth-child(5){display:none;}}
+</style>
+</head>
+<body>
+<nav>
+  <h1>San Tan Property Inspections — Admin</h1>
+  <span id="lastRefresh"></span>
+</nav>
+<div class="wrap">
+  <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
+  <div class="card">
+    <div class="card-hd"><h2>Confirmed Bookings</h2><span id="bookingCount">—</span></div>
+    <div id="bookingTable"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><h2>Reschedule Requests</h2><span id="rescheduleCount">—</span></div>
+    <div id="rescheduleTable"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+<script>
+async function load() {
+  try {
+    const r = await fetch('/admin/data');
+    const d = await r.json();
+
+    // Stats
+    const totalRev = d.bookings.reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
+    const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
+    const monthJobs = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).length;
+    const monthRev  = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
+
+    // Top agent
+    const agentCount = {};
+    d.bookings.forEach(function(b){ const n=b.data.buyerAgent&&b.data.buyerAgent.name?b.data.buyerAgent.name:'Unknown'; agentCount[n]=(agentCount[n]||0)+1; });
+    const topAgent = Object.entries(agentCount).sort(function(a,b){return b[1]-a[1];})[0];
+
+    document.getElementById('stats').innerHTML =
+      '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+d.bookings.length+'</div><div class="sub">all time</div></div>' +
+      '<div class="stat"><div class="lbl">Total Revenue</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">all time</div></div>' +
+      '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' revenue</div></div>' +
+      '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
+      '<div class="stat"><div class="lbl">Pending Reschedules</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
+
+    // Bookings table
+    document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
+    if (!d.bookings.length) {
+      document.getElementById('bookingTable').innerHTML = '<div class="empty">No confirmed bookings yet.</div>';
+    } else {
+      const rows = d.bookings.slice().reverse().map(function(b) {
+        const bd = b.data;
+        const dt = new Date(b.confirmed_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+        const discBadge = bd.discountCode ? '<span class="badge badge-disc">'+bd.discountCode+'</span> ' : '';
+        const tripBadge = bd.tripCharge&&bd.tripCharge.apply ? '<span class="badge badge-trip">trip</span> ' : '';
+        const addons = bd.addons&&bd.addons.length ? bd.addons.join(', ') : '—';
+        return '<tr>' +
+          '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
+          '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
+          '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
+          '<td><div class="agent">'+(bd.buyerAgent?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div></td>' +
+          '</tr>';
+      }).join('');
+      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    }
+
+    // Reschedule table
+    document.getElementById('rescheduleCount').textContent = d.reschedules.length + ' total';
+    if (!d.reschedules.length) {
+      document.getElementById('rescheduleTable').innerHTML = '<div class="empty">No reschedule requests.</div>';
+    } else {
+      const rrows = d.reschedules.slice().reverse().map(function(r) {
+        const dt = new Date(r.requested_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+        return '<tr>' +
+          '<td><div class="name">'+r.name+'</div><div class="svc">'+dt+'</div></td>' +
+          '<td>'+(r.conf_id?'<span class="conf">'+r.conf_id+'</span>':'—')+'</td>' +
+          '<td><div class="svc">'+(r.email||'—')+'</div><div class="svc">'+(r.phone||'—')+'</div></td>' +
+          '<td><div class="resc-msg">'+(r.message||'No message provided.')+'</div></td>' +
+          '</tr>';
+      }).join('');
+      document.getElementById('rescheduleTable').innerHTML = '<table><thead><tr><th>Name</th><th>Conf #</th><th>Contact</th><th>Message</th></tr></thead><tbody>'+rrows+'</tbody></table>';
+    }
+
+    document.getElementById('lastRefresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error(e);
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>`);
+});
+
+app.get('/admin/data', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const [bookings, reschedules] = await Promise.all([
+      pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC'),
+      pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
+    ]);
+    res.json({ bookings: bookings.rows, reschedules: reschedules.rows });
+  } catch(e) {
+    console.error('Admin data:', e.message);
+    res.status(500).json({ error: 'DB error' });
+  }
 });
 
 // ── START ─────────────────────────────────────────────────────
