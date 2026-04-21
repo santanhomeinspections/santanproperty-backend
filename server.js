@@ -55,6 +55,7 @@ async function initDb() {
     `);
     // Add paid_at column if it doesn't exist (for existing deployments)
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -853,15 +854,19 @@ async function load() {
         const tripBadge = bd.tripCharge&&bd.tripCharge.apply ? '<span class="badge badge-trip">trip</span> ' : '';
         const addons = bd.addons&&bd.addons.length ? bd.addons.join(', ') : '—';
         const isPaid = !!b.paid_at;
-        const paidBtn = isPaid
-          ? '<button onclick="markUnpaid(''+bd.confId+'')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">✓ Paid — Undo</button>'
-          : '<button onclick="markPaid(''+bd.confId+'')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>';
+        const isCancelled = !!b.cancelled_at;
+        const paidBtn = isCancelled
+          ? '<span style="color:#C0392B;font-size:.72rem;font-weight:700">CANCELLED</span>'
+          : (isPaid
+            ? '<button onclick="markUnpaid(''+bd.confId+'')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
+            : '<button onclick="markPaid(''+bd.confId+'')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
+        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(''+bd.confId+'',''+( bd.fullName||'' ).replace(/'/g,'')+'')" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
           '<td><div class="agent">'+(bd.buyerAgent?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div>'+paidBtn+'</td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div>'+paidBtn+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Paid</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -888,6 +893,14 @@ async function load() {
   } catch(e) {
     console.error(e);
   }
+}
+
+async function cancelBooking(confId, name) {
+  if (!confirm('Cancel the booking for ' + name + ' (' + confId + ')? This will delete the calendar event and email the buyer and agent.')) return;
+  const r = await fetch('/admin/cancel-booking', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  const data = await r.json();
+  if (data.success) { alert('Booking cancelled. Cancellation emails sent.'); load(); }
+  else { alert('Error: ' + (data.error||'Unknown error')); }
 }
 
 async function markPaid(confId) {
@@ -931,6 +944,90 @@ setInterval(load, 60000);
 </script>
 </body>
 </html>`);
+});
+
+app.post('/admin/cancel-booking', async function(req, res) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+
+  let booking;
+  try {
+    const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    booking = r.rows[0];
+  } catch(e) { return res.status(500).json({ error: e.message }); }
+
+  const d = booking.data;
+
+  // Delete Google Calendar event
+  if (d.calId) {
+    try {
+      await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: d.calId, sendUpdates: 'none' });
+      console.log('Calendar event deleted: ' + d.calId);
+    } catch(e) { console.warn('Calendar delete failed:', e.message); }
+  }
+
+  // Mark as cancelled in DB
+  try {
+    await pool.query('UPDATE confirmed_bookings SET cancelled_at = NOW() WHERE conf_id = $1', [confId]);
+  } catch(e) { console.error('DB cancel update:', e.message); }
+
+  // Email buyer
+  const buyerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C0392B;padding-top:20px">'
+    + '<div style="text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:20px">'
+    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+    + '</div>'
+    + '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
+    + '<p>Hi ' + (d.buyer && d.buyer.firstName ? d.buyer.firstName : 'there') + ',</p>'
+    + '<p>Your inspection has been cancelled. We apologize for any inconvenience.</p>'
+    + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+    + '<tr><td style="padding:6px 0;color:#888;width:130px">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + (d.address||'') + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + (d.dateFmt||'') + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + (d.time||'') + '</td></tr>'
+    + '</table>'
+    + '<p>If you would like to reschedule, please contact us:</p>'
+    + '<p>📞 <strong>(480) 418-7633</strong><br>✉️ <strong>santanpropertyinspections@gmail.com</strong></p>'
+    + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+    + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
+    + '</div>';
+
+  try {
+    if (d.buyer && d.buyer.email) {
+      await sendEmail(d.buyer.email, 'Inspection Cancelled — ' + confId, buyerHtml);
+    }
+  } catch(e) { console.error('Cancel buyer email:', e.message); }
+
+  // Email buyer's agent
+  if (d.buyerAgent && d.buyerAgent.email) {
+    const agentHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C0392B;padding-top:20px">'
+      + '<div style="text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:20px">'
+      + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+      + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+      + '</div>'
+      + '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
+      + '<p>Hi ' + d.buyerAgent.name + ',</p>'
+      + '<p>The inspection for your buyer has been cancelled.</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + (d.fullName||'') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + (d.address||'') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + (d.dateFmt||'') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
+      + '</table>'
+      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
+      + '</div>';
+    try {
+      await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml);
+    } catch(e) { console.error('Cancel agent email:', e.message); }
+  }
+
+  res.json({ success: true });
 });
 
 app.post('/admin/mark-paid', async function(req, res) {
