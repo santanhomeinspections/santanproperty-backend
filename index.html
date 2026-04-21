@@ -344,7 +344,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <div class="apill"><div class="apill-l"><h4>🏚️ Shed / Out Building</h4><p>Detached garage, casita, workshop</p></div><div class="apill-r"><div class="ap">+$50</div><div class="at">+30 min</div></div></div>
       <div class="apill"><div class="apill-l"><h4>🏛️ Built 1959 or Earlier</h4><p>Older construction surcharge</p></div><div class="apill-r"><div class="ap">+$80</div><div class="at">+30 min</div></div></div>
       <div class="apill"><div class="apill-l"><h4>🕰️ Built 1960–1980</h4><p>Vintage construction surcharge</p></div><div class="apill-r"><div class="ap">+$50</div><div class="at">+30 min</div></div></div>
-      <div class="apill" style="border-color:rgba(201,168,76,.35)"><div class="apill-l"><h4>☀️ Afternoon — May thru Aug</h4><p>Summer afternoon heat surcharge</p></div><div class="apill-r"><div class="ap">+$50</div><div class="at">seasonal</div></div></div>
+      <div class="apill" style="border-color:rgba(201,168,76,.35)"><div class="apill-l"><h4>☀️ Afternoon — May thru Aug</h4><p>Arizona summers require inspections to start before noon for safe attic &amp; roof access. Noon or later start times during May–Aug incur a heat surcharge.</p></div><div class="apill-r"><div class="ap">+$50</div><div class="at">seasonal</div></div></div>
     </div>
     <p class="pnote">* All prices are starting rates. Year-built surcharges apply automatically. Final price confirmed after reviewing property details.</p>
   </div>
@@ -492,6 +492,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
               <option value="pre-listing">Pre-Listing Inspection</option>
               <option value="new-construction">New Construction Inspection</option>
               <option value="warranty">Pre-One Year Warranty Inspection</option>
+              <option value="reinspection">Re-Inspection</option>
             </select>
           </div>
           <div class="wnav"><button class="btn-back" onclick="goStep(1)">← Back</button><button class="btn-next" onclick="goStep(3)">Next: Add-Ons →</button></div>
@@ -517,7 +518,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
                 <option value="9999">4,501+ sq ft</option>
               </select>
             </div>
-            <div class="fg"><label>Year Built *</label><input type="number" id="yearBuilt" placeholder="e.g. 2005" min="1800" max="2026" onchange="calcPrice()"/></div>
+            <div class="fg"><label>Year Built *</label><input type="number" id="yearBuilt" placeholder="e.g. 2018" min="1800" max="2026" onchange="calcPrice()"/></div>
           </div>
           <div id="pbar1" class="pbar" style="display:none">
             <div><div class="pbar-lbl">Base Price</div><div class="pbar-note" id="pb1note">Add-ons below adjust total</div></div>
@@ -689,7 +690,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <button class="mcl" onclick="closeModal()" type="button">×</button>
     <span class="big-ico">✅</span>
     <h2>Booking Confirmed!</h2>
-    <p>Your request has been received! You'll receive a confirmation text once Jaren approves the booking — usually within a few minutes.</p>
+    <p>Your request has been received! You'll receive a confirmation <strong>text and email</strong> once Jaren approves the booking — usually within a few minutes.</p>
     <div class="md" id="modDetail"></div>
     <p style="font-size:.79rem;color:var(--warm-gray)">Questions or need to reschedule? Call or text <strong>(480) 418-7633</strong> or email <a href="mailto:santanpropertyinspections@gmail.com" style="color:var(--gold)">santanpropertyinspections@gmail.com</a>. Payment collected on inspection day.</p>
     <button class="btn-p" style="width:100%;margin-top:11px" onclick="closeModal()" type="button">Done!</button>
@@ -711,7 +712,7 @@ const SHIFT_RED=new Set(['2026-01-02','2026-01-08','2026-01-14','2026-01-20','20
 
 function dateKey(y,mo,d){return y+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');}
 const SQFT_LBL={1000:'≤ 1,000 sq ft',1500:'1,001–1,500',2000:'1,501–2,000',2500:'2,001–2,500',3000:'2,501–3,000',3500:'3,001–3,500',4000:'3,501–4,000',4500:'4,001–4,500',9999:'4,501+'};
-const INSP_LBL={'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection','new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection'};
+const INSP_LBL={'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection','new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection','reinspection':'Re-Inspection'};
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ALL_SLOTS=['8:00 AM','8:30 AM','9:00 AM','9:30 AM','10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','1:00 PM','1:30 PM','2:00 PM','2:30 PM','3:00 PM'];
