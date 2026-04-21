@@ -1,5 +1,6 @@
 /**
  * San Tan Property Inspections — Backend Server v2
+ * Postgres-backed pending bookings
  */
 
 require('dotenv').config();
@@ -8,6 +9,7 @@ const cors       = require('cors');
 const { google } = require('googleapis');
 const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
+const { Pool }   = require('pg');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -25,6 +27,48 @@ app.use(cors({
   credentials: true,
 }));
 
+// ── POSTGRES ──────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway')
+    ? { rejectUnauthorized: false }
+    : false,
+});
+
+async function initDb() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pending_bookings (
+        token       TEXT PRIMARY KEY,
+        data        JSONB NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Clean up anything older than 48 hours on startup
+    await pool.query(`DELETE FROM pending_bookings WHERE created_at < NOW() - INTERVAL '48 hours'`);
+    console.log('DB ready');
+  } catch (e) {
+    console.error('DB init error:', e.message);
+  }
+}
+
+async function dbSet(token, data) {
+  await pool.query(
+    'INSERT INTO pending_bookings (token, data) VALUES ($1, $2) ON CONFLICT (token) DO UPDATE SET data = $2',
+    [token, JSON.stringify(data)]
+  );
+}
+
+async function dbGet(token) {
+  const r = await pool.query('SELECT data FROM pending_bookings WHERE token = $1', [token]);
+  return r.rows.length ? r.rows[0].data : null;
+}
+
+async function dbDelete(token) {
+  await pool.query('DELETE FROM pending_bookings WHERE token = $1', [token]);
+}
+
+// ── GOOGLE CALENDAR ───────────────────────────────────────────
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -45,6 +89,7 @@ function slotToMins(slot) {
   return h * 60 + m;
 }
 
+// ── TWILIO ────────────────────────────────────────────────────
 const tw      = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TW_FROM = process.env.TWILIO_PHONE_NUMBER;
 
@@ -66,8 +111,7 @@ async function sms(to, body) {
   }
 }
 
-const pendingBookings = new Map();
-
+// ── GEO / TRIP CHARGE ─────────────────────────────────────────
 const SERVICE_CITIES = ['chandler','gilbert','mesa','tempe','queen creek','san tan valley','florence','apache junction'];
 const BASE_LAT = 33.1534;
 const BASE_LNG = -111.5368;
@@ -99,12 +143,13 @@ async function checkTripCharge(address) {
   return { apply: false, miles: 0 };
 }
 
+// ── EMAIL ─────────────────────────────────────────────────────
 async function sendEmail(to, subject, html) {
   try {
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer re_QP15DwwE_BMkWn2nPJ6HT9BVRC6EBCtuG',
+        'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -120,6 +165,7 @@ async function sendEmail(to, subject, html) {
   } catch(e) { throw e; }
 }
 
+// ── ROUTES ────────────────────────────────────────────────────
 app.get('/api/health', function(req, res){ res.json({ status:'ok', ts: new Date().toISOString() }); });
 
 app.get('/api/availability', async function(req, res) {
@@ -127,8 +173,8 @@ app.get('/api/availability', async function(req, res) {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
 
-  const inspDuration = parseInt(req.query.duration) || 360;
-  const BUFFER_MINS  = 120;
+  const inspDuration   = parseInt(req.query.duration) || 360;
+  const BUFFER_MINS    = 120;
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
   try {
@@ -147,10 +193,10 @@ app.get('/api/availability', async function(req, res) {
 
     const booked = [];
     for (let s = 0; s < ALL_SLOTS.length; s++) {
-      const slot = ALL_SLOTS[s];
+      const slot    = ALL_SLOTS[s];
       const slotMins = slotToMins(slot);
-      const slotH = Math.floor(slotMins/60), slotM = slotMins%60;
-      const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
+      const slotH   = Math.floor(slotMins/60), slotM = slotMins%60;
+      const slotStart     = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
       const slotWindowEnd = new Date(slotStart.getTime() + totalBlockMins * 60000);
 
       for (let i = 0; i < allItems.length; i++) {
@@ -158,17 +204,13 @@ app.get('/api/availability', async function(req, res) {
         if (!ev.start || !ev.start.dateTime) continue;
         const evStart = new Date(ev.start.dateTime);
         const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
-
         const eventStartsInWindow = evStart >= slotStart && evStart < slotWindowEnd;
         const eventOverlapsSlot   = evStart <= slotStart && evEnd > slotStart;
-
         if ((eventStartsInWindow || eventOverlapsSlot) && !booked.includes(slot)) {
-          booked.push(slot);
-          break;
+          booked.push(slot); break;
         }
       }
     }
-
     res.json({ date, booked, available: ALL_SLOTS.filter(function(s){ return !booked.includes(s); }) });
   } catch (e) {
     console.error('Availability:', e.message);
@@ -179,8 +221,8 @@ app.get('/api/availability', async function(req, res) {
 app.post('/api/book', async function(req, res) {
   const b = req.body;
   const { address, sqft, yearBuilt, inspType, totalPrice, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
-  const addons = b.addons || [];
-  const extraEmails = (b.extraEmails || []).filter(function(e){ return e && e.trim(); });
+  const addons         = b.addons || [];
+  const extraEmails    = (b.extraEmails || []).filter(function(e){ return e && e.trim(); });
   const discountCode   = b.discountCode   || null;
   const discountPct    = b.discountPct    || null;
   const discountAmount = b.discountAmount || null;
@@ -201,7 +243,7 @@ app.post('/api/book', async function(req, res) {
   const confId   = 'STH-' + uuidv4().slice(0,8).toUpperCase();
   const fullName = buyer.firstName + ' ' + buyer.lastName;
   const sm       = slotToMins(time);
-  const slotH = Math.floor(sm/60), slotM = sm%60;
+  const slotH    = Math.floor(sm/60), slotM = sm%60;
   const startDT  = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
   const endDT    = new Date(startDT.getTime() + (totalMins||120)*60000);
 
@@ -218,21 +260,28 @@ app.post('/api/book', async function(req, res) {
     if ((chk.data.items||[]).length) return res.status(409).json({ error:'That slot was just booked — please choose another.' });
   } catch(e) { console.warn('Slot check failed:', e.message); }
 
-  const token = uuidv4();
-  const trip = await checkTripCharge(address);
+  const token      = uuidv4();
+  const trip       = await checkTripCharge(address);
   const finalPrice = trip.apply ? totalPrice + TRIP_CHARGE_AMT : totalPrice;
 
-  pendingBookings.set(token, { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, createdAt: Date.now() });
+  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, createdAt: Date.now() };
+
+  try {
+    await dbSet(token, bookingData);
+  } catch(e) {
+    console.error('DB write failed:', e.message);
+    return res.status(500).json({ error: 'Could not save booking. Please try again.' });
+  }
 
   const BASE_URL   = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
   const confirmUrl = BASE_URL + '/confirm/' + token;
   const cancelUrl  = BASE_URL + '/cancel/'  + token;
 
-  const sellerLineOwner = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + '<br>Phone: ' + (sellerAgent.phone||'—') + '</p>' : '';
-  const tripLineOwner   = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + trip.miles + ' miles)</p>' : '';
-  const notesLineOwner  = notes ? '<p><b>Notes:</b> ' + notes + '</p>' : '';
+  const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + '<br>Phone: ' + (sellerAgent.phone||'—') + '</p>' : '';
+  const tripLineOwner      = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + trip.miles + ' miles)</p>' : '';
+  const notesLineOwner     = notes ? '<p><b>Notes:</b> ' + notes + '</p>' : '';
   const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + extraEmails.join(', ') + '</p>' : '';
-  const discountLineOwner = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')</p>' : '';
+  const discountLineOwner  = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')</p>' : '';
 
   const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:560px">'
     + '<h2>New Booking Request — ' + confId + '</h2>'
@@ -263,14 +312,21 @@ app.post('/api/book', async function(req, res) {
 });
 
 app.get('/confirm/:token', async function(req, res) {
-  const booking = pendingBookings.get(req.params.token);
+  let booking;
+  try {
+    booking = await dbGet(req.params.token);
+  } catch(e) {
+    console.error('DB read error:', e.message);
+    return res.send('<h2>Database error. Please try again or call (480) 418-7633.</h2>');
+  }
   if (!booking) return res.send('<h2>This confirmation link has expired or already been used.</h2>');
 
   const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge } = booking;
-  pendingBookings.delete(req.params.token);
 
-  const sm2 = slotToMins(time);
-  const slotH2 = Math.floor(sm2/60), slotM2 = sm2%60;
+  try { await dbDelete(req.params.token); } catch(e) { console.error('DB delete error:', e.message); }
+
+  const sm2     = slotToMins(time);
+  const slotH2  = Math.floor(sm2/60), slotM2 = sm2%60;
   const startDT2 = new Date(`${date}T${String(slotH2).padStart(2,'0')}:${String(slotM2).padStart(2,'0')}:00-07:00`);
   const endDT2   = new Date(startDT2.getTime() + (totalMins||120)*60000);
 
@@ -340,7 +396,6 @@ app.get('/confirm/:token', async function(req, res) {
     await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
   } catch(e) { console.error('Buyer email:', e.message); }
 
-  // Send confirmation email to extra report recipients
   if (extraEmails && extraEmails.length) {
     const extraHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
       + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
@@ -358,7 +413,6 @@ app.get('/confirm/:token', async function(req, res) {
       + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
       + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
       + '</div>';
-
     for (const email of extraEmails) {
       try {
         await sendEmail(email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', extraHtml);
@@ -423,10 +477,16 @@ app.get('/confirm/:token', async function(req, res) {
 });
 
 app.get('/cancel/:token', async function(req, res) {
-  const booking = pendingBookings.get(req.params.token);
+  let booking;
+  try {
+    booking = await dbGet(req.params.token);
+  } catch(e) {
+    console.error('DB read error:', e.message);
+    return res.send('<h2>Database error. Please try again or call (480) 418-7633.</h2>');
+  }
   if (!booking) return res.send('<h2>This link has expired or already been used.</h2>');
   const { confId, fullName, dateFmt, time } = booking;
-  pendingBookings.delete(req.params.token);
+  try { await dbDelete(req.params.token); } catch(e) { console.error('DB delete error:', e.message); }
   console.log('Booking cancelled: ' + confId);
   res.send('<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C0392B">'
     + '<h2 style="color:#C0392B">Booking Cancelled</h2>'
@@ -452,4 +512,7 @@ app.post('/sms/reply', express.urlencoded({ extended: false }), async function(r
   res.send('<Response></Response>');
 });
 
-app.listen(PORT, function(){ console.log('San Tan Property Inspections backend on port ' + PORT); });
+// ── START ─────────────────────────────────────────────────────
+initDb().then(function() {
+  app.listen(PORT, function(){ console.log('San Tan Property Inspections backend on port ' + PORT); });
+});
