@@ -521,13 +521,69 @@ app.get('/confirm/:token', async function(req, res) {
     } catch(e) { console.error('Seller agent email:', e.message); }
   }
 
-  const tripConfirmLine = tripCharge.apply ? '<p>Trip charge of $' + TRIP_CHARGE_AMT + ' applied (' + tripCharge.miles + ' miles)</p>' : '';
-  res.send('<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C9A84C">'
-    + '<h2 style="color:#1B2D52">Booking Confirmed!</h2>'
-    + '<p>Texts sent to buyer and agents.</p>'
-    + '<p><b>' + fullName + '</b><br>' + dateFmt + ' @ ' + time + '<br>' + address + '</p>'
-    + '<p style="color:#C9A84C;font-weight:700">Conf: ' + confId + '</p>'
-    + tripConfirmLine + '</div>');
+  const tripConfirmLine = tripCharge.apply ? '<tr><td style="padding:6px 0;color:#888;width:130px">Trip Charge</td><td style="color:#C9A84C;font-weight:600">+$' + TRIP_CHARGE_AMT + ' (' + tripCharge.miles + ' miles)</td></tr>' : '';
+  const discountConfirmLine = discountCode ? '<tr><td style="padding:6px 0;color:#888">Discount</td><td style="color:#1ab464;font-weight:600">' + discountCode + ' (-$' + discountAmount + ')</td></tr>' : '';
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Booking Confirmed — San Tan Property Inspections</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;position:relative;overflow:hidden;}
+body::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23C9A84C' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");pointer-events:none;}
+.card{background:#fff;border-radius:16px;padding:40px 36px;max-width:520px;width:100%;position:relative;z-index:1;box-shadow:0 28px 70px rgba(0,0,0,.4);}
+.logo{text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:28px;}
+.logo-title{font-family:Georgia,serif;font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:2px;}
+.logo-sub{font-family:Georgia,serif;font-size:.65rem;color:#E8C97A;letter-spacing:4px;margin-top:3px;}
+.check{width:60px;height:60px;background:#e8f7ee;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:1.8rem;}
+h1{font-family:Georgia,serif;font-size:1.5rem;color:#1B2D52;text-align:center;margin-bottom:6px;}
+.sub{text-align:center;color:#8C7B6B;font-size:.88rem;margin-bottom:28px;line-height:1.6;}
+.conf-badge{background:#1B2D52;color:#C9A84C;font-weight:700;font-size:.82rem;letter-spacing:1px;padding:8px 18px;border-radius:20px;display:inline-block;margin:0 auto 24px;display:block;text-align:center;}
+table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:.88rem;}
+td{padding:8px 0;vertical-align:top;border-bottom:1px solid #F0EBE0;}
+tr:last-child td{border-bottom:none;}
+td:first-child{color:#8C7B6B;width:130px;}
+td:last-child{color:#2C2C2C;font-weight:600;}
+.total-row td{padding-top:14px;font-size:1rem;}
+.total-row td:first-child{font-weight:700;color:#1B2D52;}
+.total-row td:last-child{color:#C9A84C;font-size:1.2rem;}
+.notice{background:#FAF7F0;border-radius:8px;padding:14px 16px;font-size:.82rem;color:#8C7B6B;line-height:1.7;margin-bottom:20px;}
+.notice strong{color:#1B2D52;}
+.footer{text-align:center;font-size:.78rem;color:#B0A898;border-top:1px solid #F0EBE0;padding-top:16px;}
+.footer a{color:#C9A84C;text-decoration:none;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-title">SAN TAN PROPERTY</div>
+    <div class="logo-sub">INSPECTIONS</div>
+  </div>
+  <div class="check">✅</div>
+  <h1>Booking Confirmed!</h1>
+  <p class="sub">Confirmation texts have been sent to the buyer and agents.</p>
+  <div class="conf-badge">Confirmation # ${confId}</div>
+  <table>
+    <tr><td>Buyer</td><td>${fullName}</td></tr>
+    <tr><td>Property</td><td>${address}</td></tr>
+    <tr><td>Service</td><td>${svcLabel}${addons.length ? ' + ' + addonsLine : ''}</td></tr>
+    <tr><td>Date</td><td>${dateFmt}</td></tr>
+    <tr><td>Time</td><td>${time}${endTime ? ' to ' + endTime : ''}</td></tr>
+    ${tripConfirmLine}${discountConfirmLine}
+    <tr class="total-row"><td>Total Charged</td><td>$${finalPrice}</td></tr>
+  </table>
+  <div class="notice">
+    <strong>📱 Texts sent to:</strong> ${fullName} · ${buyerAgent.name}${sellerAgent && sellerAgent.name ? ' · ' + sellerAgent.name : ''}<br>
+    <strong>📧 Emails sent to:</strong> ${buyer.email}${buyerAgent.email ? ' · ' + buyerAgent.email : ''}
+  </div>
+  <div class="footer">
+    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;·&nbsp; (480) 418-7633 &nbsp;·&nbsp; License #79346
+  </div>
+</div>
+</body>
+</html>`);
 });
 
 app.get('/cancel/:token', async function(req, res) {
