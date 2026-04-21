@@ -6,6 +6,7 @@
 <title>San Tan Property Inspections – East Valley, AZ</title>
 <meta name="description" content="Professional home inspections in Gilbert, Chandler, Queen Creek, Mesa and the East Valley. Same-day reports. Book online instantly."/>
 <link rel="canonical" href="https://santanpropertyinspections.com"/>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 175'%3E%3Crect width='300' height='175' fill='%230F1C35'/%3E%3Cpolygon points='10,135 70,55 130,135' fill='%23C9A84C'/%3E%3Cpolygon points='170,135 230,55 290,135' fill='%23C9A84C'/%3E%3Cpolygon points='80,135 150,22 220,135' fill='%23B8962A'/%3E%3Crect x='128' y='82' width='44' height='36' fill='%231B2D52'/%3E%3Cpolygon points='120,84 150,62 180,84' fill='%231B2D52'/%3E%3Crect x='143' y='100' width='14' height='18' fill='%23C9A84C'/%3E%3C/svg%3E"/>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
 :root{--gold:#C9A84C;--gold-light:#E8C97A;--navy:#1B2D52;--navy-dark:#0F1C35;--navy-mid:#2A4070;--cream:#FAF7F0;--warm-gray:#8C7B6B;--text:#2C2C2C;--white:#FFFFFF;--error:#C0392B;--border:#E2D9C8;}
@@ -551,7 +552,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div style="font-size:.8rem;color:var(--warm-gray);margin-bottom:18px">💳 <strong style="color:var(--navy-dark)">Payment</strong> collected day-of inspection. We accept Square, Venmo, Zelle, and cash.</div>
           <div class="wnav">
             <button class="btn-back" onclick="goStep(4)">← Back</button>
-            <button class="btn-next" id="confBtn" onclick="submitBooking()">Confirm Booking <div class="spin"></div></button>
+            <button class="btn-next" id="confBtn" onclick="submitBooking()"><span id="confBtnText">Confirm Booking</span> <div class="spin"></div></button>
           </div>
         </div>
 
@@ -598,7 +599,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <div style="margin-top:13px;font-size:.79rem;line-height:1.9"><strong style="color:#BEC8D8">Primary Service Areas:</strong><br>Gilbert · Chandler · Mesa · Tempe<br>Queen Creek · San Tan Valley<br>Florence · Apache Junction<br><span style="color:#6A7F9A;font-size:.74rem">Extended areas available · Trip charge applies</span></div>
     </div>
   </div>
-  <div class="fbot"><p>© 2026 San Tan Property Inspections &nbsp;·&nbsp; santanpropertyinspections.com &nbsp;·&nbsp; East Valley, Arizona &nbsp;·&nbsp; Licensed &amp; Insured</p></div>
+  <div class="fbot"><p>© 2026 San Tan Property Inspections &nbsp;·&nbsp; santanpropertyinspections.com &nbsp;·&nbsp; East Valley, Arizona &nbsp;·&nbsp; Licensed &amp; Insured</p><p style="margin-top:10px"><a href="#privacy-policy" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Privacy Policy</a> &nbsp;·&nbsp; <a href="#terms-and-conditions" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Terms &amp; Conditions</a></p></div>
 </footer>
 
 <div class="modal-overlay" id="succMod">
@@ -859,9 +860,14 @@ function discountedTotal() {
   if (!BD.discount) return BD.totalP;
   return BD.totalP - BD.discount.amount;
 }
+let bookingSubmitted=false;
 async function submitBooking(){
+  if(bookingSubmitted){showToast('Your booking is already being processed.',false);return;}
+  bookingSubmitted=true;
   const btn=document.getElementById('confBtn');
+  const btnText=document.getElementById('confBtnText');
   btn.classList.add('loading');btn.disabled=true;
+  if(btnText)btnText.textContent='Submitting…';
   const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"],['baName',"Buyer's agent name"],['baPhone',"Buyer's agent phone"]];
   for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;return;}}
   BD.buyer={firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),phone:document.getElementById('bPhone').value.trim(),email:document.getElementById('bEmail').value.trim()};
@@ -894,7 +900,15 @@ async function submitBooking(){
       <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${data.confirmationId}</div></div>`;
     document.getElementById('succMod').classList.add('active');
   }catch(e){showToast(e.message||'Something went wrong. Please call us.',true);}
-  finally{btn.classList.remove('loading');btn.disabled=false;}
+  finally{
+    btn.classList.remove('loading');
+    if(!bookingSubmitted||document.getElementById('succMod').classList.contains('active')){
+      // keep disabled if success modal showing
+    } else {
+      btn.disabled=false;bookingSubmitted=false;
+    }
+    if(btnText&&!document.getElementById('succMod').classList.contains('active'))btnText.textContent='Confirm Booking';
+  }
 }
 function closeModal(){document.getElementById('succMod').classList.remove('active');}
 document.getElementById('succMod').addEventListener('click',function(e){if(e.target===this)closeModal();});
@@ -964,5 +978,45 @@ window.addEventListener("hashchange",checkHash);
 window.addEventListener("load",checkHash);
 </script>
 <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBCNujdEjf3Gw51CJF1gPuANtaS_2_LOdI&libraries=places&callback=initAutocomplete" async defer></script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "LocalBusiness",
+  "name": "San Tan Property Inspections",
+  "description": "Professional home inspections in Gilbert, Chandler, Queen Creek, Mesa and the East Valley. Same-day reports. Licensed Inspector #79346.",
+  "url": "https://santanpropertyinspections.com",
+  "telephone": "+14804187633",
+  "email": "santanpropertyinspections@gmail.com",
+  "priceRange": "$$",
+  "image": "https://santanpropertyinspections.com/logo-gold.jpg",
+  "address": {
+    "@type": "PostalAddress",
+    "addressLocality": "Gilbert",
+    "addressRegion": "AZ",
+    "addressCountry": "US"
+  },
+  "geo": {
+    "@type": "GeoCoordinates",
+    "latitude": 33.1534,
+    "longitude": -111.5368
+  },
+  "areaServed": [
+    "Gilbert, AZ", "Chandler, AZ", "Mesa, AZ", "Tempe, AZ",
+    "Queen Creek, AZ", "San Tan Valley, AZ", "Florence, AZ", "Apache Junction, AZ"
+  ],
+  "openingHours": "Mo-Sa 08:00-17:00",
+  "hasOfferCatalog": {
+    "@type": "OfferCatalog",
+    "name": "Home Inspection Services",
+    "itemListElement": [
+      {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Pre-Purchase Inspection"}},
+      {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Pre-Listing Inspection"}},
+      {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "New Construction Inspection"}},
+      {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Termite / WDO Inspection"}},
+      {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Pool Inspection"}}
+    ]
+  }
+}
+</script>
 </body>
 </html>
