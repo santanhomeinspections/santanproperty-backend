@@ -599,7 +599,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <div style="margin-top:13px;font-size:.79rem;line-height:1.9"><strong style="color:#BEC8D8">Primary Service Areas:</strong><br>Gilbert · Chandler · Mesa · Tempe<br>Queen Creek · San Tan Valley<br>Florence · Apache Junction<br><span style="color:#6A7F9A;font-size:.74rem">Extended areas available · Trip charge applies</span></div>
     </div>
   </div>
-  <div class="fbot"><p>© 2026 San Tan Property Inspections &nbsp;·&nbsp; santanpropertyinspections.com &nbsp;·&nbsp; East Valley, Arizona &nbsp;·&nbsp; Licensed &amp; Insured</p><p style="margin-top:10px"><a href="#privacy-policy" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Privacy Policy</a> &nbsp;·&nbsp; <a href="#terms-and-conditions" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Terms &amp; Conditions</a></p></div>
+  <div class="fbot"><p>© 2026 San Tan Property Inspections &nbsp;·&nbsp; santanpropertyinspections.com &nbsp;·&nbsp; East Valley, Arizona &nbsp;·&nbsp; Licensed &amp; Insured</p><p style="margin-top:10px"><a href="#privacy-policy" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Privacy Policy</a> &nbsp;·&nbsp; <a href="#terms-and-conditions" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Terms &amp; Conditions</a> &nbsp;·&nbsp; <a href="#inspection-agreement" style="color:#4A5A7A;text-decoration:none;font-size:.74rem;transition:color .2s" onmouseover="this.style.color='#C9A84C'" onmouseout="this.style.color='#4A5A7A'">Inspection Agreement</a></p></div>
 </footer>
 
 <div class="modal-overlay" id="succMod">
@@ -800,6 +800,45 @@ function validate(s){
   return true;
 }
 
+function validPhone(p){return /^[\d\s\(\)\-\+]{10,15}$/.test(p.replace(/\s/g,''))&&p.replace(/\D/g,'').length>=10;}
+function validEmail(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);}
+
+function validateContacts(){
+  const fields=[
+    {id:'bPhone',  label:"Buyer's phone",       fn:validPhone},
+    {id:'bEmail',  label:"Buyer's email",        fn:validEmail},
+    {id:'baPhone', label:"Buyer's agent phone",  fn:validPhone},
+  ];
+  // Optional fields — only validate format if filled in
+  const optional=[
+    {id:'baEmail', label:"Buyer's agent email",  fn:validEmail},
+    {id:'saPhone', label:"Seller's agent phone", fn:validPhone},
+    {id:'saEmail', label:"Seller's agent email", fn:validEmail},
+  ];
+  let ok=true;
+  for(const f of fields){
+    const el=document.getElementById(f.id);
+    if(!el) continue;
+    const val=el.value.trim();
+    if(!val){el.classList.add('err');showToast('Please enter '+f.label+'.',true);ok=false;break;}
+    if(!f.fn(val)){el.classList.add('err');showToast('Please enter a valid '+f.label+'.',true);ok=false;break;}
+  }
+  if(!ok) return false;
+  for(const f of optional){
+    const el=document.getElementById(f.id);
+    if(!el) continue;
+    const val=el.value.trim();
+    if(val&&!f.fn(val)){el.classList.add('err');showToast('Please enter a valid '+f.label+' or leave it blank.',true);ok=false;break;}
+  }
+  // Validate extra emails
+  const extras=document.querySelectorAll('#extraEmailList input');
+  for(const inp of extras){
+    const val=inp.value.trim();
+    if(val&&!validEmail(val)){inp.classList.add('err');showToast('One of the extra email addresses doesn't look right.',true);ok=false;break;}
+  }
+  return ok;
+}
+
 document.querySelectorAll('input,select,textarea').forEach(el=>{
   el.addEventListener('input',()=>{el.classList.remove('err');if(document.getElementById('wp5').classList.contains('active'))buildSum();});
   el.addEventListener('change',()=>{el.classList.remove('err');if(document.getElementById('wp5').classList.contains('active'))buildSum();});
@@ -870,7 +909,9 @@ async function submitBooking(){
   if(btnText)btnText.textContent='Submitting…';
   const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"],['baName',"Buyer's agent name"],['baPhone',"Buyer's agent phone"]];
   for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;return;}}
+  // Collect first so validateContacts can reference values
   BD.buyer={firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),phone:document.getElementById('bPhone').value.trim(),email:document.getElementById('bEmail').value.trim()};
+  if(!validateContacts()){btn.classList.remove('loading');btn.disabled=false;bookingSubmitted=false;if(btnText)btnText.textContent='Confirm Booking';return;}
   BD.ba={name:document.getElementById('baName').value.trim(),brokerage:document.getElementById('baBrok').value.trim(),phone:document.getElementById('baPhone').value.trim(),email:document.getElementById('baEmail').value.trim()};
   BD.sa={name:document.getElementById('saName').value.trim(),brokerage:document.getElementById('saBrok').value.trim(),phone:document.getElementById('saPhone').value.trim(),email:document.getElementById('saEmail').value.trim()};
   BD.notes=document.getElementById('notes').value.trim();
@@ -936,6 +977,26 @@ function showToast(msg,isErr=false){const t=document.getElementById('toast');t.t
 document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){const t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
 </script>
 
+<div id="inspection-agreement" style="display:none;max-width:800px;margin:80px auto;padding:40px;font-family:Georgia,serif;color:#333;line-height:1.8;">
+  <h1 style="color:#1B2D52;">Home Inspection Agreement</h1>
+  <p><strong>San Tan Property Inspections</strong> — Licensed Inspector #79346</p>
+  <p style="font-size:.85rem;color:#8C7B6B;margin:12px 0 24px">This is a summary of our inspection agreement. The full agreement is signed on the day of inspection. <a href="SanTan_Inspection_Agreement.docx" style="color:#C9A84C;font-weight:600" download>Download full agreement (.docx)</a></p>
+  <h2>Scope</h2>
+  <p>We perform a non-invasive visual inspection of accessible systems and components including roof, structure, electrical, plumbing, HVAC, and interior/exterior. A written report with photos is delivered the same day as the inspection — after payment is received.</p>
+  <h2>Exclusions</h2>
+  <p>We do not inspect for radon, mold, asbestos, lead, code compliance, termites (unless WDO add-on purchased), pools/spas (unless add-on purchased), or auxiliary systems such as alarm, solar, or sprinkler systems.</p>
+  <h2>Payment</h2>
+  <p>Payment is due on the day of inspection. The report will not be released until payment is received in full. We accept cash, Venmo, Zelle, and Square. A $125 re-inspection fee applies if utilities are not on and accessible at the time of the scheduled inspection.</p>
+  <h2>Limitation of Liability</h2>
+  <p>Our liability is limited to a refund of the inspection fee paid. Client waives any claim for consequential or incidental damages.</p>
+  <h2>Claims</h2>
+  <p>Written notification of any claim must be provided within 10 days of discovery, with immediate access for re-inspection before any repairs are made. No legal action may be filed more than one year after the inspection date.</p>
+  <h2>Dispute Resolution</h2>
+  <p>Disputes are resolved by arbitration. At least one arbitrator must be an Arizona Certified Home Inspector with five or more years of experience.</p>
+  <p style="margin-top:24px"><a href="SanTan_Inspection_Agreement.docx" style="color:#C9A84C;font-weight:700" download>⬇ Download Full Inspection Agreement (.docx)</a></p>
+  <p style="margin-top:16px"><a href="/" style="color:#1B2D52;">← Back to Home</a></p>
+</div>
+
 <div id="privacy-policy" style="display:none;max-width:800px;margin:80px auto;padding:40px;font-family:Georgia,serif;color:#333;line-height:1.8;">
   <h1 style="color:#1B2D52;">Privacy Policy</h1>
   <p><strong>Last updated:</strong> April 2026</p>
@@ -973,7 +1034,7 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
 </div>
 
 <script>
-function checkHash(){var hash=window.location.hash.replace("#","");var sections=["privacy-policy","terms-and-conditions"];sections.forEach(function(id){var el=document.getElementById(id);if(el)el.style.display=(hash===id)?"block":"none";});}
+function checkHash(){var hash=window.location.hash.replace("#","");var sections=["privacy-policy","terms-and-conditions","inspection-agreement"];sections.forEach(function(id){var el=document.getElementById(id);if(el)el.style.display=(hash===id)?"block":"none";});}
 window.addEventListener("hashchange",checkHash);
 window.addEventListener("load",checkHash);
 </script>
