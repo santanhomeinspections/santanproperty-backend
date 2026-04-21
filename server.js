@@ -165,7 +165,10 @@ async function checkTripCharge(address) {
   try {
     const encoded = encodeURIComponent(address);
     const url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encoded + '&key=' + process.env.GOOGLE_MAPS_API_KEY;
-    const r = await fetch(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(function(){ controller.abort(); }, 4000); // 4 second timeout
+    const r = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
     const data = await r.json();
     if (data.results && data.results[0]) {
       const loc = data.results[0].geometry.location;
@@ -179,8 +182,11 @@ async function checkTripCharge(address) {
 // ── EMAIL ─────────────────────────────────────────────────────
 async function sendEmail(to, subject, html) {
   try {
+    const emailController = new AbortController();
+    const emailTimeout = setTimeout(function(){ emailController.abort(); }, 8000);
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
+      signal: emailController.signal,
       headers: {
         'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
         'Content-Type': 'application/json',
@@ -192,6 +198,7 @@ async function sendEmail(to, subject, html) {
         html: html,
       }),
     });
+    clearTimeout(emailTimeout);
     const data = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(data));
     return data;
@@ -252,6 +259,20 @@ app.get('/api/availability', async function(req, res) {
 });
 
 app.post('/api/book', async function(req, res) {
+  // Overall request timeout — never hang forever
+  const bookingTimeout = setTimeout(function() {
+    if (!res.headersSent) {
+      res.status(504).json({ error: 'Request timed out. Please try again or call (480) 418-7633.' });
+    }
+  }, 20000); // 20 seconds max
+  const originalJson = res.json.bind(res);
+  const originalStatus = res.status.bind(res);
+  res.json = function(data) { clearTimeout(bookingTimeout); return originalJson(data); };
+  res.status = function(code) { 
+    const s = originalStatus(code);
+    s.json = function(data) { clearTimeout(bookingTimeout); return originalJson.call(res, data); };
+    return s;
+  };
   const b = req.body;
   const { address, sqft, yearBuilt, inspType, totalPrice, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
   const addons         = b.addons || [];
