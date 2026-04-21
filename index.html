@@ -263,6 +263,22 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
 
 .ac-grid { position: relative; z-index: 1; }
 .ac { position: relative; z-index: 1; pointer-events: auto !important; }
+
+  #contact{background:var(--cream);}
+  .contact-wrap{display:grid;grid-template-columns:1fr 1fr;gap:52px;align-items:start;max-width:900px;margin:0 auto;}
+  .contact-info h3{font-family:'Playfair Display',serif;font-size:1.2rem;color:var(--navy-dark);margin-bottom:16px;}
+  .contact-detail{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px;}
+  .contact-detail .ci{font-size:1.1rem;flex-shrink:0;margin-top:2px;}
+  .contact-detail strong{display:block;font-size:.83rem;color:var(--navy-dark);margin-bottom:2px;}
+  .contact-detail span{font-size:.83rem;color:var(--warm-gray);}
+  .contact-detail a{color:var(--gold);text-decoration:none;font-size:.83rem;}
+  .contact-form-card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:28px;}
+  .contact-form-card h3{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--navy-dark);margin-bottom:20px;}
+  .contact-success{display:none;text-align:center;padding:24px 0;}
+  .contact-success .ci{font-size:2.2rem;display:block;margin-bottom:10px;}
+  .contact-success h4{font-family:'Playfair Display',serif;color:var(--navy-dark);margin-bottom:6px;}
+  .contact-success p{font-size:.85rem;color:var(--warm-gray);}
+  @media(max-width:900px){.contact-wrap{grid-template-columns:1fr;gap:28px;}}
 .pac-container { z-index: 9999 !important; pointer-events: auto !important; }
 .pac-item { cursor: pointer !important; padding: 8px 12px !important; font-size: 0.95rem !important; }
 .pac-item:hover { background: #f5f0e8 !important; }
@@ -276,6 +292,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <li><a href="#pricing">Pricing</a></li>
     <li><a href="#why">Why Us</a></li>
     <li><a href="#payment">Payment</a></li>
+    <li><a href="#contact">Contact</a></li>
     <li><a href="#booking" class="nav-cta">Book Now</a></li>
   </ul>
   <button class="hamburger" onclick="document.getElementById('navLinks').classList.toggle('open')" aria-label="Menu">
@@ -369,6 +386,71 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   </div>
 </section>
 
+<section id="contact">
+  <div class="container">
+    <div class="slabel">Get In Touch</div>
+    <h2 class="stitle">Contact Us</h2>
+    <div class="contact-wrap">
+      <div class="contact-info">
+        <h3>Questions? We're happy to help.</h3>
+        <p style="font-size:.88rem;color:var(--warm-gray);line-height:1.7;margin-bottom:24px">Whether you're a buyer, agent, or seller with questions about the inspection process, pricing, or scheduling — reach out and we'll get back to you quickly.</p>
+        <div class="contact-detail">
+          <span class="ci">📞</span>
+          <div><strong>Call or Text</strong><a href="tel:+14804187633">(480) 418-7633</a></div>
+        </div>
+        <div class="contact-detail">
+          <span class="ci">✉️</span>
+          <div><strong>Email</strong><a href="mailto:santanpropertyinspections@gmail.com">santanpropertyinspections@gmail.com</a></div>
+        </div>
+        <div class="contact-detail">
+          <span class="ci">🌐</span>
+          <div><strong>Website</strong><span>santanpropertyinspections.com</span></div>
+        </div>
+        <div class="contact-detail">
+          <span class="ci">📍</span>
+          <div><strong>Service Area</strong><span>Gilbert · Chandler · Mesa · Tempe · Queen Creek · San Tan Valley · Florence · Apache Junction</span></div>
+        </div>
+        <div class="contact-detail">
+          <span class="ci">🕐</span>
+          <div><strong>Hours</strong><span>Monday – Saturday, 8:00 AM – 5:00 PM</span></div>
+        </div>
+        <div style="margin-top:24px;background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);border-radius:8px;padding:16px;">
+          <p style="font-size:.83rem;color:var(--navy-dark);font-weight:700;margin-bottom:6px">Ready to book?</p>
+          <p style="font-size:.82rem;color:var(--warm-gray);margin-bottom:12px">Use our online booking system for instant scheduling with live calendar availability.</p>
+          <a href="#booking" class="btn-p" style="font-size:.85rem;padding:10px 22px">Book Online →</a>
+        </div>
+      </div>
+      <div class="contact-form-card">
+        <h3>Send Us a Message</h3>
+        <div id="contactSuccess" class="contact-success">
+          <span class="ci">✅</span>
+          <h4>Message Sent!</h4>
+          <p>We'll get back to you as soon as possible — usually within a few hours.</p>
+        </div>
+        <div id="contactForm">
+          <div class="fg"><label>Your Name *</label><input type="text" id="cName" placeholder="Jane Smith"/></div>
+          <div class="fg">
+            <label>I am a *</label>
+            <select id="cRole">
+              <option value="">— Select —</option>
+              <option value="buyer">Buyer / Homeowner</option>
+              <option value="agent">Buyer's Agent</option>
+              <option value="seller">Seller / Listing Agent</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="fr2">
+            <div class="fg"><label>Phone</label><input type="tel" id="cPhone" placeholder="(480) 555-0100"/></div>
+            <div class="fg"><label>Email *</label><input type="email" id="cEmail" placeholder="jane@email.com"/></div>
+          </div>
+          <div class="fg"><label>Message *</label><textarea id="cMessage" rows="4" placeholder="Questions about pricing, scheduling, what to expect during an inspection..."></textarea></div>
+          <button class="btn-next" style="width:100%;justify-content:center" onclick="submitContact()" id="contactBtn">Send Message <div class="spin" id="contactSpin"></div></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="booking">
   <div class="container">
     <div class="slabel">Schedule Online</div>
@@ -435,7 +517,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
                 <option value="9999">4,501+ sq ft</option>
               </select>
             </div>
-            <div class="fg"><label>Year Built *</label><input type="number" id="yearBuilt" placeholder="e.g. 2005" min="1800" max="2025" onchange="calcPrice()"/></div>
+            <div class="fg"><label>Year Built *</label><input type="number" id="yearBuilt" placeholder="e.g. 2005" min="1800" max="2026" onchange="calcPrice()"/></div>
           </div>
           <div id="pbar1" class="pbar" style="display:none">
             <div><div class="pbar-lbl">Base Price</div><div class="pbar-note" id="pb1note">Add-ons below adjust total</div></div>
@@ -874,25 +956,34 @@ function buildSum(){
 }
 
 // ── DISCOUNT CODES ────────────────────────────────────────────
-const DISCOUNT_CODES = {
-  'SAVE10': 10,
-  'SAVE20': 20,
-};
-// BD.discount = { code, pct, amount } or null
+// Codes managed from /admin dashboard — validated against DB
 BD.discount = null;
 
-function applyDiscount() {
+async function applyDiscount() {
   const input = document.getElementById('discountCode');
   const msg = document.getElementById('discountMsg');
+  const btn = document.querySelector('.btn-apply-code');
   const code = (input.value || '').trim().toUpperCase();
   if (!code) { msg.className='discount-msg err'; msg.textContent='Please enter a code.'; return; }
   if (!BD.totalP) { msg.className='discount-msg err'; msg.textContent='Please complete home details first (Step 3).'; return; }
-  const pct = DISCOUNT_CODES[code];
-  if (!pct) { msg.className='discount-msg err'; msg.textContent='That code isn\'t valid. Check the spelling and try again.'; BD.discount=null; buildSum(); return; }
-  const amount = Math.round(BD.totalP * pct / 100);
-  BD.discount = { code, pct, amount };
-  msg.className='discount-msg ok'; msg.textContent=pct+'% discount applied — saving $'+amount+'!';
-  buildSum();
+  if (btn) { btn.textContent='Checking…'; btn.disabled=true; }
+  try {
+    const r = await fetch(API + '/validate-code?code=' + encodeURIComponent(code));
+    const data = await r.json();
+    if (!data.valid) {
+      msg.className='discount-msg err'; msg.textContent="That code isn't valid. Check the spelling and try again.";
+      BD.discount=null; buildSum(); return;
+    }
+    const pct = data.pct;
+    const amount = Math.round(BD.totalP * pct / 100);
+    BD.discount = { code, pct, amount };
+    msg.className='discount-msg ok'; msg.textContent=pct+'% discount applied — saving $'+amount+'!';
+    buildSum();
+  } catch(e) {
+    msg.className='discount-msg err'; msg.textContent='Could not validate code. Please try again.';
+  } finally {
+    if (btn) { btn.textContent='Apply'; btn.disabled=false; }
+  }
 }
 
 function discountedTotal() {
@@ -972,6 +1063,34 @@ function initAutocomplete(){
   ac.addListener('place_changed',function(){const place=ac.getPlace();if(place.formatted_address){input.value=place.formatted_address;input.classList.remove('err');checkServiceArea();}});
 }
 window.initAutocomplete=initAutocomplete;
+
+async function submitContact(){
+  const btn=document.getElementById('contactBtn');
+  const spin=document.getElementById('contactSpin');
+  const name=document.getElementById('cName').value.trim();
+  const role=document.getElementById('cRole').value;
+  const phone=document.getElementById('cPhone').value.trim();
+  const email=document.getElementById('cEmail').value.trim();
+  const message=document.getElementById('cMessage').value.trim();
+  if(!name){showToast('Please enter your name.',true);return;}
+  if(!role){showToast('Please select your role.',true);return;}
+  if(!email||!validEmail(email)){showToast('Please enter a valid email address.',true);return;}
+  if(!message){showToast('Please enter a message.',true);return;}
+  btn.disabled=true;if(spin)spin.style.display='block';
+  try{
+    const r=await fetch('https://santanproperty-backend-production.up.railway.app/api/contact',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,phone,email,role,message})
+    });
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.error||'Failed to send');
+    document.getElementById('contactForm').style.display='none';
+    document.getElementById('contactSuccess').style.display='block';
+  }catch(e){
+    showToast(e.message||'Something went wrong. Please call or email directly.',true);
+    btn.disabled=false;
+  }finally{if(spin)spin.style.display='none';}
+}
 
 function showToast(msg,isErr=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');void t.offsetWidth;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3800);}
 document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){const t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
