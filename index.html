@@ -825,7 +825,7 @@ async function pickDay(y,mo,d){
   const grid=document.getElementById('tGrid');
   grid.innerHTML='<div class="cal-load" style="grid-column:1/-1">Checking availability…</div>';
   let booked=[], dayBlocked=false;
-  try{const r=await fetch(`${API}/availability?date=${BD.dateStr}`);const data=await r.json();booked=data.booked||[];dayBlocked=data.dayBlocked||false;}catch(e){}
+  try{const dur=BD.totalM||BD.baseM||360;const r=await fetch(`${API}/availability?date=${BD.dateStr}&duration=${dur}`);const data=await r.json();booked=data.booked||[];dayBlocked=data.dayBlocked||false;}catch(e){}
   const dur=BD.totalM||BD.baseM||90;
   const isRedDay=SHIFT_RED.has(BD.dateStr);
   if(dayBlocked){
