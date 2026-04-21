@@ -126,6 +126,12 @@ app.get('/api/availability', async function(req, res) {
   const date = req.query.date;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
+
+  // Duration in minutes passed from frontend (BD.totalM), fallback to max possible
+  const inspDuration = parseInt(req.query.duration) || 360; // default 6hrs if unknown
+  const BUFFER_MINS  = 120; // 2 hour buffer after inspection ends
+  const totalBlockMins = inspDuration + BUFFER_MINS;
+
   try {
     const timeMin = `${date}T00:00:00-07:00`;
     const timeMax = `${date}T23:59:59-07:00`;
@@ -139,22 +145,35 @@ app.get('/api/availability', async function(req, res) {
     const allItems = [...(mainResp.data.items||[]), ...(blockResp.data.items||[])];
     const dayBlocked = allItems.some(function(ev){ return ev.start && ev.start.date && !ev.start.dateTime; });
     if (dayBlocked) return res.json({ date, booked: ALL_SLOTS, available: [], dayBlocked: true });
+
     const booked = [];
-    for (let i = 0; i < allItems.length; i++) {
-      const ev = allItems[i];
-      if (!ev.start || !ev.start.dateTime) continue;
-      const evStart = new Date(ev.start.dateTime);
-      const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : null;
-      for (let s = 0; s < ALL_SLOTS.length; s++) {
-        const slot = ALL_SLOTS[s];
-        const slotMins = slotToMins(slot);
-        const slotH = Math.floor(slotMins/60), slotM = slotMins%60;
-        const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
-        const startsAtSlot = evStart.getHours()===slotH && evStart.getMinutes()===slotM;
-        const spansSlot    = evEnd && evStart<=slotStart && evEnd>slotStart;
-        if ((startsAtSlot||spansSlot) && !booked.includes(slot)) booked.push(slot);
+    for (let s = 0; s < ALL_SLOTS.length; s++) {
+      const slot = ALL_SLOTS[s];
+      const slotMins = slotToMins(slot);
+      const slotH = Math.floor(slotMins/60), slotM = slotMins%60;
+      const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
+      // Window that must stay clear: slot start → slot start + inspection duration + 2hr buffer
+      const slotWindowEnd = new Date(slotStart.getTime() + totalBlockMins * 60000);
+
+      for (let i = 0; i < allItems.length; i++) {
+        const ev = allItems[i];
+        if (!ev.start || !ev.start.dateTime) continue;
+        const evStart = new Date(ev.start.dateTime);
+        const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
+
+        // Block this slot if:
+        // 1. An event starts inside the inspection+buffer window
+        // 2. An event ends after the slot starts (event overlaps slot itself)
+        const eventStartsInWindow = evStart >= slotStart && evStart < slotWindowEnd;
+        const eventOverlapsSlot   = evStart <= slotStart && evEnd > slotStart;
+
+        if ((eventStartsInWindow || eventOverlapsSlot) && !booked.includes(slot)) {
+          booked.push(slot);
+          break;
+        }
       }
     }
+
     res.json({ date, booked, available: ALL_SLOTS.filter(function(s){ return !booked.includes(s); }) });
   } catch (e) {
     console.error('Availability:', e.message);
