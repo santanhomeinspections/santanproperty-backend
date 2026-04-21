@@ -741,7 +741,6 @@ function removeExtraEmail(btn){
 }
 function syncExtraEmails(){
   BD.extraEmails=Array.from(document.querySelectorAll('#extraEmailList input')).map(i=>i.value.trim()).filter(Boolean);
-  if(document.getElementById('wp5').classList.contains('active'))buildSum();
 }
 
 // ── PRICING ────────────────────────────────────────────────────
@@ -1000,7 +999,7 @@ async function submitBooking(){
   btn.classList.add('loading');btn.disabled=true;
   if(btnText)btnText.textContent='Submitting…';
   const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"],['baName',"Buyer's agent name"],['baPhone',"Buyer's agent phone"]];
-  for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;return;}}
+  for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;bookingSubmitted=false;if(btnText)btnText.textContent='Confirm Booking';return;}}
   // Collect first so validateContacts can reference values
   BD.buyer={firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),phone:document.getElementById('bPhone').value.trim(),email:document.getElementById('bEmail').value.trim()};
   if(!validateContacts()){btn.classList.remove('loading');btn.disabled=false;bookingSubmitted=false;if(btnText)btnText.textContent='Confirm Booking';return;}
@@ -1035,12 +1034,10 @@ async function submitBooking(){
   }catch(e){showToast(e.message||'Something went wrong. Please call us.',true);}
   finally{
     btn.classList.remove('loading');
-    if(!bookingSubmitted||document.getElementById('succMod').classList.contains('active')){
-      // keep disabled if success modal showing
-    } else {
+    if(!document.getElementById('succMod').classList.contains('active')){
       btn.disabled=false;bookingSubmitted=false;
+      if(btnText)btnText.textContent='Confirm Booking';
     }
-    if(btnText&&!document.getElementById('succMod').classList.contains('active'))btnText.textContent='Confirm Booking';
   }
 }
 function closeModal(){document.getElementById('succMod').classList.remove('active');}
