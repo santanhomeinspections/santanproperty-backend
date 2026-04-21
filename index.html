@@ -7,8 +7,6 @@
 <meta name="description" content="Professional home inspections in Gilbert, Chandler, Queen Creek, Mesa and the East Valley. Same-day reports. Book online instantly."/>
 <link rel="canonical" href="https://santanpropertyinspections.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
-  <!-- Google Places for address autocomplete. Replace AIzaSyBCNujdEjf3Gw51CJF1gPuANtaS_2_LOdI below. Enable "Maps JavaScript API" + "Places API" in Google Cloud Console. -->
-  
 <style>
 :root{--gold:#C9A84C;--gold-light:#E8C97A;--navy:#1B2D52;--navy-dark:#0F1C35;--navy-mid:#2A4070;--cream:#FAF7F0;--warm-gray:#8C7B6B;--text:#2C2C2C;--white:#FFFFFF;--error:#C0392B;--border:#E2D9C8;}
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -48,7 +46,6 @@ section{padding:80px 24px;}
 .ssub{font-size:1rem;color:var(--warm-gray);max-width:540px;line-height:1.7;}
 .container{max-width:1100px;margin:0 auto;}
 
-/* PRICING */
 #pricing{background:var(--white);}
 .price-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;margin-top:36px;}
 .pc{background:var(--cream);border:1.5px solid var(--border);border-radius:10px;padding:18px 14px;text-align:center;transition:all .25s;position:relative;overflow:hidden;}
@@ -68,7 +65,6 @@ section{padding:80px 24px;}
 .apill-r .at{color:#8A9AB5;font-size:.7rem;text-align:right;margin-top:1px;}
 .pnote{margin-top:18px;font-size:.8rem;color:var(--warm-gray);font-style:italic;}
 
-/* WHY */
 #why{background:var(--cream);}
 .why-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:20px;margin-top:40px;}
 .wc{text-align:center;padding:26px 16px;border-radius:10px;background:var(--white);border:1px solid var(--border);transition:all .25s;}
@@ -77,14 +73,12 @@ section{padding:80px 24px;}
 .wc h3{font-family:'Playfair Display',serif;font-size:1.05rem;color:var(--navy-dark);margin-bottom:7px;}
 .wc p{font-size:.83rem;color:var(--warm-gray);line-height:1.6;}
 
-/* BOOKING */
 #booking{background:linear-gradient(135deg,var(--navy-dark) 0%,var(--navy) 100%);position:relative;overflow:hidden;}
 #booking::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23C9A84C' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");}
 #booking .stitle{color:var(--white);}
 #booking .ssub{color:#8A9AB5;}
 .wiz-wrap{background:var(--white);border-radius:14px;overflow:hidden;box-shadow:0 28px 70px rgba(0,0,0,.35);margin-top:40px;position:relative;}
 
-/* Progress */
 .wiz-prog{background:var(--cream);border-bottom:1px solid var(--border);}
 .prog-steps{display:flex;}
 .ps{flex:1;padding:14px 6px;text-align:center;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#B0A898;border-bottom:3px solid transparent;transition:all .25s;}
@@ -94,14 +88,12 @@ section{padding:80px 24px;}
 .ps.done .sn{background:var(--gold);}
 .ps.active .sn{background:var(--navy-dark);}
 
-/* Body */
 .wiz-body{padding:34px 38px;}
 .wpanel{display:none;}
 .wpanel.active{display:block;animation:fadeUp .3s ease both;}
 .wsec-title{font-family:'Playfair Display',serif;font-size:1.3rem;color:var(--navy-dark);margin-bottom:4px;}
 .wsec-sub{font-size:.86rem;color:var(--warm-gray);margin-bottom:24px;line-height:1.6;}
 
-/* Form */
 .fg{margin-bottom:16px;}
 .fg label{display:block;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.9px;color:var(--navy);margin-bottom:5px;}
 .fg input,.fg select,.fg textarea{width:100%;padding:10px 13px;border:1.5px solid var(--border);border-radius:7px;font-size:.93rem;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--cream);transition:border-color .2s;outline:none;}
@@ -109,14 +101,12 @@ section{padding:80px 24px;}
 .fg input.err,.fg select.err{border-color:var(--error)!important;}
 .fr2{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
 
-/* Price bar */
 .pbar{background:var(--navy-dark);border-radius:8px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;margin:18px 0;flex-wrap:wrap;gap:8px;}
 .pbar-lbl{color:#8A9AB5;font-size:.79rem;}
 .pbar-note{color:#8A9AB5;font-size:.7rem;margin-top:1px;}
 .pbar-total{font-family:'Playfair Display',serif;font-size:1.45rem;color:var(--gold);font-weight:700;}
 .pbar-dur{color:#BEC8D8;font-size:.79rem;}
 
-/* Add-on checks */
 .ac-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:9px;margin-bottom:18px;}
 .ac{display:flex;align-items:flex-start;gap:9px;background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:13px;cursor:pointer;transition:all .2s;user-select:none;}
 .ac:hover{border-color:var(--gold);background:rgba(201,168,76,.05);}
@@ -127,7 +117,6 @@ section{padding:80px 24px;}
 .ac-body span{font-size:.74rem;color:var(--warm-gray);}
 .ac-price{font-weight:700;color:var(--gold);font-size:.87rem;white-space:nowrap;}
 
-/* Calendar */
 .cal{background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:15px;}
 .cal-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
 .cal-nav{background:none;border:none;cursor:pointer;color:var(--navy);font-size:1.15rem;padding:4px 9px;border-radius:4px;transition:background .2s;}
@@ -146,7 +135,6 @@ section{padding:80px 24px;}
 .cd.empty{cursor:default;}
 .cal-load{text-align:center;padding:16px;color:var(--warm-gray);font-size:.82rem;}
 
-/* Time slots */
 .tgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:12px;}
 .ts{border:1.5px solid var(--border);border-radius:7px;padding:9px 4px;text-align:center;font-size:.78rem;font-weight:600;cursor:pointer;color:var(--navy);background:var(--cream);transition:all .15s;line-height:1.3;}
 .ts:hover:not(.booked){border-color:var(--gold);background:rgba(201,168,76,.1);}
@@ -154,7 +142,6 @@ section{padding:80px 24px;}
 .ts.booked{background:#F2EFEB;color:#BBB;cursor:not-allowed;border-color:var(--border);font-size:.7rem;}
 .ts .et{display:block;font-size:.66rem;opacity:.7;}
 
-/* Contact cards */
 .csec{background:var(--cream);border:1px solid var(--border);border-radius:8px;padding:18px;margin-bottom:16px;}
 .csec-hd{display:flex;align-items:center;gap:9px;margin-bottom:14px;}
 .badge{font-size:.67rem;font-weight:700;text-transform:uppercase;padding:3px 8px;border-radius:10px;letter-spacing:.5px;}
@@ -163,7 +150,15 @@ section{padding:80px 24px;}
 .badge-gray{background:var(--cream);color:var(--warm-gray);border:1px solid var(--border);}
 .csec-hd h4{font-family:'Playfair Display',serif;font-size:1rem;color:var(--navy-dark);}
 
-/* Summary */
+/* Extra report recipients */
+.extra-email-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+.extra-email-row input{flex:1;padding:10px 13px;border:1.5px solid var(--border);border-radius:7px;font-size:.93rem;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--white);transition:border-color .2s;outline:none;}
+.extra-email-row input:focus{border-color:var(--gold);}
+.btn-remove-email{background:none;border:1.5px solid var(--border);border-radius:6px;width:34px;height:34px;cursor:pointer;color:var(--warm-gray);font-size:1.1rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;line-height:1;}
+.btn-remove-email:hover{border-color:var(--error);color:var(--error);}
+.btn-add-email{background:none;border:1.5px dashed var(--gold);border-radius:7px;color:var(--gold);font-size:.82rem;font-weight:600;padding:9px 16px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%;margin-top:4px;transition:all .2s;}
+.btn-add-email:hover{background:rgba(201,168,76,.08);}
+
 .sum-box{background:var(--cream);border:1.5px solid var(--border);border-radius:10px;padding:22px;margin-bottom:20px;}
 .sum-box h4{font-family:'Playfair Display',serif;font-size:1rem;color:var(--navy-dark);margin-bottom:12px;padding-bottom:9px;border-bottom:1px solid var(--border);}
 .sr{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;font-size:.85rem;}
@@ -173,7 +168,6 @@ section{padding:80px 24px;}
 .sum-total .sk{font-weight:700;color:var(--navy-dark);font-size:.95rem;}
 .sum-total .sv{font-family:'Playfair Display',serif;font-size:1.55rem;color:var(--gold);font-weight:700;}
 
-/* Wiz nav */
 .wnav{display:flex;justify-content:space-between;align-items:center;margin-top:24px;padding-top:18px;border-top:1px solid var(--border);}
 .btn-back{background:none;border:1.5px solid var(--border);color:var(--warm-gray);font-size:.86rem;font-weight:600;padding:10px 22px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;}
 .btn-back:hover{border-color:var(--warm-gray);color:var(--navy-dark);}
@@ -183,10 +177,8 @@ section{padding:80px 24px;}
 .spin{width:15px;height:15px;border:2px solid rgba(15,28,53,.2);border-top-color:var(--navy-dark);border-radius:50%;animation:spin .6s linear infinite;display:none;}
 .loading .spin{display:block;}
 
-/* Selected datetime indicator */
 .dt-ind{background:rgba(201,168,76,.1);border:1px solid rgba(201,168,76,.3);border-radius:7px;padding:11px 14px;margin-top:14px;font-size:.86rem;color:var(--navy-dark);display:none;}
 
-/* Payment */
 #payment{background:var(--white);}
 .pay-layout{display:grid;grid-template-columns:1fr 1fr;gap:52px;align-items:center;}
 .pay-vis{background:linear-gradient(135deg,var(--navy-dark),var(--navy-mid));border-radius:16px;padding:36px;text-align:center;position:relative;overflow:hidden;}
@@ -251,27 +243,21 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   .price-grid{grid-template-columns:repeat(2,1fr);}
 }
 
-  /* Google Maps autocomplete dropdown fix */
+/* Discount code */
+.discount-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+.discount-row input{flex:1;padding:10px 13px;border:1.5px solid var(--border);border-radius:7px;font-size:.93rem;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--cream);transition:border-color .2s;outline:none;text-transform:uppercase;}
+.discount-row input:focus{border-color:var(--gold);background:var(--white);}
+.btn-apply-code{background:var(--navy);color:var(--white);border:none;border-radius:7px;padding:10px 18px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;transition:background .2s;}
+.btn-apply-code:hover{background:var(--navy-mid);}
+.discount-msg{font-size:.8rem;margin-top:4px;padding:7px 11px;border-radius:6px;display:none;}
+.discount-msg.ok{background:rgba(26,180,100,.1);color:#0a6e35;border:1px solid #1ab464;display:block;}
+.discount-msg.err{background:rgba(192,57,43,.08);color:var(--error);border:1px solid rgba(192,57,43,.3);display:block;}
 
-  /* Ensure addon cards are always clickable */
-  .ac-grid { position: relative; z-index: 1; }
-  .ac { position: relative; z-index: 1; pointer-events: auto !important; }
-  /* Only show pac-container when on step 1 */
-  .pac-container { z-index: 9999 !important; }
-
-  .pac-container {
-    z-index: 999999 !important;
-    pointer-events: auto !important;
-  }
-  .pac-item {
-    cursor: pointer !important;
-    padding: 8px 12px !important;
-    font-size: 0.95rem !important;
-  }
-  .pac-item:hover {
-    background: #f5f0e8 !important;
-  }
-
+.ac-grid { position: relative; z-index: 1; }
+.ac { position: relative; z-index: 1; pointer-events: auto !important; }
+.pac-container { z-index: 9999 !important; pointer-events: auto !important; }
+.pac-item { cursor: pointer !important; padding: 8px 12px !important; font-size: 0.95rem !important; }
+.pac-item:hover { background: #f5f0e8 !important; }
 </style>
 </head>
 <body>
@@ -361,46 +347,17 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <p class="ssub" style="margin:0 auto">We cover the East Valley and surrounding areas. Outside our standard zone? We'll travel for an additional trip charge — just give us a call.</p>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:32px">
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Gilbert</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Chandler</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Queen Creek</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">San Tan Valley</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Mesa</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Tempe</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Florence</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Apache Junction</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div>
-      </div>
-      <div style="background:linear-gradient(135deg,rgba(201,168,76,.1),rgba(201,168,76,.05));border:1.5px dashed var(--gold);border-radius:8px;padding:14px 10px;text-align:center">
-        <div style="font-size:.82rem;font-weight:700;color:var(--gold)">Other Areas</div>
-        <div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Trip charge applies</div>
-      </div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Gilbert</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Chandler</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Queen Creek</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">San Tan Valley</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Mesa</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Tempe</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Florence</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:var(--cream);border:1.5px solid var(--border);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--navy-dark)">Apache Junction</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Primary Area</div></div>
+      <div style="background:linear-gradient(135deg,rgba(201,168,76,.1),rgba(201,168,76,.05));border:1.5px dashed var(--gold);border-radius:8px;padding:14px 10px;text-align:center"><div style="font-size:.82rem;font-weight:700;color:var(--gold)">Other Areas</div><div style="font-size:.7rem;color:var(--warm-gray);margin-top:3px">Trip charge applies</div></div>
     </div>
-    <div style="text-align:center">
-      <p style="font-size:.85rem;color:var(--warm-gray)">Not sure if we cover your area? Call or text Jaren at <a href="tel:+14805180595" style="color:var(--gold);font-weight:700">(480) 418-7633</a></p>
-    </div>
+    <div style="text-align:center"><p style="font-size:.85rem;color:var(--warm-gray)">Not sure if we cover your area? Call or text Jaren at <a href="tel:+14804187633" style="color:var(--gold);font-weight:700">(480) 418-7633</a></p></div>
   </div>
 </section>
 
@@ -411,7 +368,6 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <p class="ssub">Complete the steps below — about 3 minutes. Texts go to all parties once Jaren confirms your booking.</p>
     <div class="wiz-wrap">
 
-      <!-- Progress bar -->
       <div class="wiz-prog">
         <div class="prog-steps">
           <div class="ps active" data-step="1"><div class="sn">1</div>Address</div>
@@ -424,7 +380,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
 
       <div class="wiz-body">
 
-        <!-- STEP 1: Address -->
+        <!-- STEP 1 -->
         <div class="wpanel active" id="wp1">
           <div class="wsec-title">Property Address</div>
           <div class="wsec-sub">Enter the address of the home to be inspected.</div>
@@ -434,7 +390,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div class="wnav"><div></div><button class="btn-next" onclick="goStep(2)">Next: Inspection Type →</button></div>
         </div>
 
-        <!-- STEP 2: Inspection Type -->
+        <!-- STEP 2 -->
         <div class="wpanel" id="wp2">
           <div class="wsec-title">Inspection Type</div>
           <div class="wsec-sub">Select the type of inspection needed for this property.</div>
@@ -451,7 +407,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div class="wnav"><button class="btn-back" onclick="goStep(1)">← Back</button><button class="btn-next" onclick="goStep(3)">Next: Add-Ons →</button></div>
         </div>
 
-        <!-- STEP 3: Add-Ons (includes sq ft + year built for pricing) -->
+        <!-- STEP 3 -->
         <div class="wpanel" id="wp3">
           <div class="wsec-title">Home Details &amp; Add-Ons</div>
           <div class="wsec-sub">Enter the home's square footage and year built. Select any additional services needed.</div>
@@ -488,7 +444,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div class="wnav"><button class="btn-back" onclick="goStep(2)">← Back</button><button class="btn-next" onclick="goStep(4)">Next: Schedule →</button></div>
         </div>
 
-        <!-- STEP 4: Calendar -->
+        <!-- STEP 4 -->
         <div class="wpanel" id="wp4">
           <div class="wsec-title">Choose a Date &amp; Time</div>
           <div class="wsec-sub">Available Monday – Saturday. Select a date to see open slots from our live calendar.</div>
@@ -517,7 +473,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div class="wnav"><button class="btn-back" onclick="goStep(3)">← Back</button><button class="btn-next" onclick="goStep(5)">Next: Contacts →</button></div>
         </div>
 
-        <!-- STEP 5: Contacts + Review -->
+        <!-- STEP 5 -->
         <div class="wpanel" id="wp5">
           <div class="wsec-title">Contact Information</div>
           <div class="wsec-sub">We'll text all parties the moment you confirm. Buyer's agent receives a utility &amp; access checklist.</div>
@@ -531,6 +487,12 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
             <div class="fr2">
               <div class="fg"><label>Cell Phone * <small style="font-weight:400;text-transform:none;letter-spacing:0">(texts sent here)</small></label><input type="tel" id="bPhone" placeholder="(480) 418-7633"/></div>
               <div class="fg"><label>Email *</label><input type="email" id="bEmail" placeholder="jane@email.com"/></div>
+            </div>
+            <!-- Additional report recipients -->
+            <div style="margin-top:4px;">
+              <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.9px;color:var(--navy);margin-bottom:8px;">Additional Report Recipients <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--warm-gray)">(optional — report email also sent here)</span></div>
+              <div id="extraEmailList"></div>
+              <button class="btn-add-email" type="button" onclick="addExtraEmail()">+ Add another email address</button>
             </div>
           </div>
 
@@ -560,8 +522,17 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
 
           <div class="fg"><label>Notes / Access Instructions</label><textarea id="notes" rows="2" placeholder="Gate code, lockbox info, pets, special access…"></textarea></div>
 
-          <!-- Booking Summary -->
-          <div class="sum-box" id="sumBox" style="margin-top:24px"></div>
+          <!-- Discount Code -->
+          <div style="margin-top:24px;margin-bottom:12px;">
+            <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.9px;color:var(--navy);margin-bottom:8px;">Promo / Discount Code <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--warm-gray)">(optional)</span></div>
+            <div class="discount-row">
+              <input type="text" id="discountCode" placeholder="Enter code" maxlength="20" oninput="this.value=this.value.toUpperCase()"/>
+              <button class="btn-apply-code" type="button" onclick="applyDiscount()">Apply</button>
+            </div>
+            <div class="discount-msg" id="discountMsg"></div>
+          </div>
+
+          <div class="sum-box" id="sumBox"></div>
 
           <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);border-radius:8px;padding:14px;margin-bottom:16px;font-size:.83rem;color:var(--warm-gray);line-height:1.75">
             <strong style="color:var(--navy-dark)">📱 Text messages will be sent to:</strong><br>
@@ -614,7 +585,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     </div>
     <div class="fc">
       <h4>Contact</h4>
-      <a href="tel:+14805180595">📞 (480) 418-7633</a>
+      <a href="tel:+14804187633">📞 (480) 418-7633</a>
       <a href="mailto:santanpropertyinspections@gmail.com">✉️ santanpropertyinspections@gmail.com</a>
       <a href="#booking">📅 Book Online</a>
       <div style="margin-top:13px;font-size:.79rem;line-height:1.9"><strong style="color:#BEC8D8">Primary Service Areas:</strong><br>Gilbert · Chandler · Mesa · Tempe<br>Queen Creek · San Tan Valley<br>Florence · Apache Junction<br><span style="color:#6A7F9A;font-size:.74rem">Extended areas available · Trip charge applies</span></div>
@@ -637,72 +608,17 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
 <div class="toast" id="toast"></div>
 
 <script>
-// ── PRICING ENGINE ──────────────────────────────────────────────
-const BASE={
-  1000:{p:400,m:90}, 1500:{p:425,m:120}, 2000:{p:450,m:150},
-  2500:{p:475,m:180}, 3000:{p:550,m:195}, 3500:{p:600,m:225},
-  4000:{p:650,m:240}, 4500:{p:675,m:270}, 9999:{p:750,m:300}
-};
+const BASE={1000:{p:400,m:90},1500:{p:425,m:120},2000:{p:450,m:150},2500:{p:475,m:180},3000:{p:550,m:195},3500:{p:600,m:225},4000:{p:650,m:240},4500:{p:675,m:270},9999:{p:750,m:300}};
 const ADDONS=[
-  {id:'termite',  name:'Termite Inspection (WDO)',    desc:'Official WDO report',        p:85,  m:30, icon:'🐛'},
-  {id:'pool',     name:'Pool Inspection',              desc:'Equipment, safety & structure',p:60, m:30, icon:'🏊'},
-  {id:'spa',      name:'Spa Inspection',               desc:'Full spa system',             p:40,  m:20, icon:'🛁'},
-  {id:'shed',     name:'Shed / Out Building',        desc:'Shed, out building, detached structure',    p:50,  m:30, icon:'🏚️'},
+  {id:'termite',name:'Termite Inspection (WDO)',desc:'Official WDO report',p:85,m:30,icon:'🐛'},
+  {id:'pool',name:'Pool Inspection',desc:'Equipment, safety & structure',p:60,m:30,icon:'🏊'},
+  {id:'spa',name:'Spa Inspection',desc:'Full spa system',p:40,m:20,icon:'🛁'},
+  {id:'shed',name:'Shed / Out Building',desc:'Shed, out building, detached structure',p:50,m:30,icon:'🏚️'},
 ];
 
-// ── C SHIFT BLACKOUT DATES (Gilbert Fire & Rescue) ────────────
-// Green = working days (fully blocked), Red = first day off (9am+ only)
-const SHIFT_GREEN = new Set([
-  '2026-01-01','2026-01-06','2026-01-07','2026-01-12','2026-01-13','2026-01-18','2026-01-19','2026-01-24',
-  '2026-01-25','2026-01-30','2026-01-31','2026-02-05','2026-02-06','2026-02-11','2026-02-12','2026-02-17',
-  '2026-02-18','2026-02-23','2026-02-24','2026-03-01','2026-03-02','2026-03-07','2026-03-08','2026-03-13',
-  '2026-03-14','2026-03-19','2026-03-20','2026-03-25','2026-03-26','2026-03-31','2026-04-01','2026-04-06',
-  '2026-04-07','2026-04-12','2026-04-13','2026-04-18','2026-04-19','2026-04-24','2026-04-25','2026-04-30',
-  '2026-05-01','2026-05-06','2026-05-07','2026-05-12','2026-05-13','2026-05-18','2026-05-19','2026-05-24',
-  '2026-05-25','2026-05-30','2026-05-31','2026-06-05','2026-06-06','2026-06-11','2026-06-12','2026-06-17',
-  '2026-06-18','2026-06-23','2026-06-24','2026-06-29','2026-06-30','2026-07-05','2026-07-06','2026-07-11',
-  '2026-07-12','2026-07-17','2026-07-18','2026-07-23','2026-07-24','2026-07-29','2026-07-30','2026-08-04',
-  '2026-08-05','2026-08-10','2026-08-11','2026-08-16','2026-08-17','2026-08-22','2026-08-23','2026-08-28',
-  '2026-08-29','2026-09-03','2026-09-04','2026-09-09','2026-09-10','2026-09-15','2026-09-16','2026-09-21',
-  '2026-09-22','2026-09-27','2026-09-28','2026-10-03','2026-10-04','2026-10-09','2026-10-10','2026-10-15',
-  '2026-10-16','2026-10-21','2026-10-22','2026-10-27','2026-10-28','2026-11-02','2026-11-03','2026-11-08',
-  '2026-11-09','2026-11-14','2026-11-15','2026-11-20','2026-11-21','2026-11-26','2026-11-27','2026-12-02',
-  '2026-12-03','2026-12-08','2026-12-09','2026-12-14','2026-12-15','2026-12-20','2026-12-21','2026-12-26',
-  '2026-12-27','2027-01-01','2027-01-02','2027-01-07','2027-01-08','2027-01-13','2027-01-14','2027-01-19',
-  '2027-01-20','2027-01-25','2027-01-26','2027-01-31','2027-02-01','2027-02-06','2027-02-07','2027-02-12',
-  '2027-02-13','2027-02-18','2027-02-19','2027-02-24','2027-02-25','2027-03-02','2027-03-03','2027-03-08',
-  '2027-03-09','2027-03-14','2027-03-15','2027-03-20','2027-03-21','2027-03-26','2027-03-27','2027-04-01',
-  '2027-04-02','2027-04-07','2027-04-08','2027-04-13','2027-04-14','2027-04-19','2027-04-20','2027-04-25',
-  '2027-04-26','2027-05-01','2027-05-02','2027-05-07','2027-05-08','2027-05-13','2027-05-14','2027-05-19',
-  '2027-05-20','2027-05-25','2027-05-26','2027-05-31','2027-06-01','2027-06-06','2027-06-07','2027-06-12',
-  '2027-06-13','2027-06-18','2027-06-19','2027-06-24','2027-06-25','2027-06-30','2027-07-01','2027-07-06',
-  '2027-07-07','2027-07-12','2027-07-13','2027-07-18','2027-07-19','2027-07-24','2027-07-25','2027-07-30',
-  '2027-07-31','2027-08-05','2027-08-06','2027-08-11','2027-08-12','2027-08-17','2027-08-18','2027-08-23',
-  '2027-08-24','2027-08-29','2027-08-30','2027-09-04','2027-09-05','2027-09-10','2027-09-11','2027-09-16',
-  '2027-09-17','2027-09-22','2027-09-23','2027-09-28','2027-09-29','2027-10-04','2027-10-05','2027-10-10',
-  '2027-10-11','2027-10-16','2027-10-17','2027-10-22','2027-10-23','2027-10-28','2027-10-29','2027-11-03',
-  '2027-11-04','2027-11-09','2027-11-10','2027-11-15','2027-11-16','2027-11-21','2027-11-22','2027-11-27',
-  '2027-11-28','2027-12-03','2027-12-04','2027-12-09','2027-12-10','2027-12-15','2027-12-16','2027-12-21',
-  '2027-12-22','2027-12-27','2027-12-28',
-]);
-const SHIFT_RED = new Set([
-  '2026-01-02','2026-01-08','2026-01-14','2026-01-20','2026-01-26','2026-02-01','2026-02-07','2026-02-13',
-  '2026-02-19','2026-02-25','2026-03-03','2026-03-09','2026-03-15','2026-03-21','2026-03-27','2026-04-02',
-  '2026-04-08','2026-04-14','2026-04-20','2026-04-26','2026-05-02','2026-05-08','2026-05-14','2026-05-20',
-  '2026-05-26','2026-06-01','2026-06-07','2026-06-13','2026-06-19','2026-06-25','2026-07-01','2026-07-07',
-  '2026-07-13','2026-07-19','2026-07-25','2026-07-31','2026-08-06','2026-08-12','2026-08-18','2026-08-24',
-  '2026-08-30','2026-09-05','2026-09-11','2026-09-17','2026-09-23','2026-09-29','2026-10-05','2026-10-11',
-  '2026-10-17','2026-10-23','2026-10-29','2026-11-04','2026-11-10','2026-11-16','2026-11-22','2026-11-28',
-  '2026-12-04','2026-12-10','2026-12-16','2026-12-22','2026-12-28','2027-01-03','2027-01-09','2027-01-15',
-  '2027-01-21','2027-01-27','2027-02-02','2027-02-08','2027-02-14','2027-02-20','2027-02-26','2027-03-04',
-  '2027-03-10','2027-03-16','2027-03-22','2027-03-28','2027-04-03','2027-04-09','2027-04-15','2027-04-21',
-  '2027-04-27','2027-05-03','2027-05-09','2027-05-15','2027-05-21','2027-05-27','2027-06-02','2027-06-08',
-  '2027-06-14','2027-06-20','2027-06-26','2027-07-02','2027-07-08','2027-07-14','2027-07-20','2027-07-26',
-  '2027-08-01','2027-08-07','2027-08-13','2027-08-19','2027-08-25','2027-08-31','2027-09-06','2027-09-12',
-  '2027-09-18','2027-09-24','2027-09-30','2027-10-06','2027-10-12','2027-10-18','2027-10-24','2027-10-30',
-  '2027-11-05','2027-11-11','2027-11-17','2027-11-23','2027-11-29','2027-12-05','2027-12-11','2027-12-17',
-  '2027-12-23','2027-12-29',
-]);
+const SHIFT_GREEN=new Set(['2026-01-01','2026-01-06','2026-01-07','2026-01-12','2026-01-13','2026-01-18','2026-01-19','2026-01-24','2026-01-25','2026-01-30','2026-01-31','2026-02-05','2026-02-06','2026-02-11','2026-02-12','2026-02-17','2026-02-18','2026-02-23','2026-02-24','2026-03-01','2026-03-02','2026-03-07','2026-03-08','2026-03-13','2026-03-14','2026-03-19','2026-03-20','2026-03-25','2026-03-26','2026-03-31','2026-04-01','2026-04-06','2026-04-07','2026-04-12','2026-04-13','2026-04-18','2026-04-19','2026-04-24','2026-04-25','2026-04-30','2026-05-01','2026-05-06','2026-05-07','2026-05-12','2026-05-13','2026-05-18','2026-05-19','2026-05-24','2026-05-25','2026-05-30','2026-05-31','2026-06-05','2026-06-06','2026-06-11','2026-06-12','2026-06-17','2026-06-18','2026-06-23','2026-06-24','2026-06-29','2026-06-30','2026-07-05','2026-07-06','2026-07-11','2026-07-12','2026-07-17','2026-07-18','2026-07-23','2026-07-24','2026-07-29','2026-07-30','2026-08-04','2026-08-05','2026-08-10','2026-08-11','2026-08-16','2026-08-17','2026-08-22','2026-08-23','2026-08-28','2026-08-29','2026-09-03','2026-09-04','2026-09-09','2026-09-10','2026-09-15','2026-09-16','2026-09-21','2026-09-22','2026-09-27','2026-09-28','2026-10-03','2026-10-04','2026-10-09','2026-10-10','2026-10-15','2026-10-16','2026-10-21','2026-10-22','2026-10-27','2026-10-28','2026-11-02','2026-11-03','2026-11-08','2026-11-09','2026-11-14','2026-11-15','2026-11-20','2026-11-21','2026-11-26','2026-11-27','2026-12-02','2026-12-03','2026-12-08','2026-12-09','2026-12-14','2026-12-15','2026-12-20','2026-12-21','2026-12-26','2026-12-27','2027-01-01','2027-01-02','2027-01-07','2027-01-08','2027-01-13','2027-01-14','2027-01-19','2027-01-20','2027-01-25','2027-01-26','2027-01-31','2027-02-01','2027-02-06','2027-02-07','2027-02-12','2027-02-13','2027-02-18','2027-02-19','2027-02-24','2027-02-25','2027-03-02','2027-03-03','2027-03-08','2027-03-09','2027-03-14','2027-03-15','2027-03-20','2027-03-21','2027-03-26','2027-03-27','2027-04-01','2027-04-02','2027-04-07','2027-04-08','2027-04-13','2027-04-14','2027-04-19','2027-04-20','2027-04-25','2027-04-26','2027-05-01','2027-05-02','2027-05-07','2027-05-08','2027-05-13','2027-05-14','2027-05-19','2027-05-20','2027-05-25','2027-05-26','2027-05-31','2027-06-01','2027-06-06','2027-06-07','2027-06-12','2027-06-13','2027-06-18','2027-06-19','2027-06-24','2027-06-25','2027-06-30','2027-07-01','2027-07-06','2027-07-07','2027-07-12','2027-07-13','2027-07-18','2027-07-19','2027-07-24','2027-07-25','2027-07-30','2027-07-31','2027-08-05','2027-08-06','2027-08-11','2027-08-12','2027-08-17','2027-08-18','2027-08-23','2027-08-24','2027-08-29','2027-08-30','2027-09-04','2027-09-05','2027-09-10','2027-09-11','2027-09-16','2027-09-17','2027-09-22','2027-09-23','2027-09-28','2027-09-29','2027-10-04','2027-10-05','2027-10-10','2027-10-11','2027-10-16','2027-10-17','2027-10-22','2027-10-23','2027-10-28','2027-10-29','2027-11-03','2027-11-04','2027-11-09','2027-11-10','2027-11-15','2027-11-16','2027-11-21','2027-11-22','2027-11-27','2027-11-28','2027-12-03','2027-12-04','2027-12-09','2027-12-10','2027-12-15','2027-12-16','2027-12-21','2027-12-22','2027-12-27','2027-12-28']);
+const SHIFT_RED=new Set(['2026-01-02','2026-01-08','2026-01-14','2026-01-20','2026-01-26','2026-02-01','2026-02-07','2026-02-13','2026-02-19','2026-02-25','2026-03-03','2026-03-09','2026-03-15','2026-03-21','2026-03-27','2026-04-02','2026-04-08','2026-04-14','2026-04-20','2026-04-26','2026-05-02','2026-05-08','2026-05-14','2026-05-20','2026-05-26','2026-06-01','2026-06-07','2026-06-13','2026-06-19','2026-06-25','2026-07-01','2026-07-07','2026-07-13','2026-07-19','2026-07-25','2026-07-31','2026-08-06','2026-08-12','2026-08-18','2026-08-24','2026-08-30','2026-09-05','2026-09-11','2026-09-17','2026-09-23','2026-09-29','2026-10-05','2026-10-11','2026-10-17','2026-10-23','2026-10-29','2026-11-04','2026-11-10','2026-11-16','2026-11-22','2026-11-28','2026-12-04','2026-12-10','2026-12-16','2026-12-22','2026-12-28','2027-01-03','2027-01-09','2027-01-15','2027-01-21','2027-01-27','2027-02-02','2027-02-08','2027-02-14','2027-02-20','2027-02-26','2027-03-04','2027-03-10','2027-03-16','2027-03-22','2027-03-28','2027-04-03','2027-04-09','2027-04-15','2027-04-21','2027-04-27','2027-05-03','2027-05-09','2027-05-15','2027-05-21','2027-05-27','2027-06-02','2027-06-08','2027-06-14','2027-06-20','2027-06-26','2027-07-02','2027-07-08','2027-07-14','2027-07-20','2027-07-26','2027-08-01','2027-08-07','2027-08-13','2027-08-19','2027-08-25','2027-08-31','2027-09-06','2027-09-12','2027-09-18','2027-09-24','2027-09-30','2027-10-06','2027-10-12','2027-10-18','2027-10-24','2027-10-30','2027-11-05','2027-11-11','2027-11-17','2027-11-23','2027-11-29','2027-12-05','2027-12-11','2027-12-17','2027-12-23','2027-12-29']);
+
 function dateKey(y,mo,d){return y+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');}
 const SQFT_LBL={1000:'≤ 1,000 sq ft',1500:'1,001–1,500',2000:'1,501–2,000',2500:'2,001–2,500',3000:'2,501–3,000',3500:'3,001–3,500',4000:'3,501–4,000',4500:'4,001–4,500',9999:'4,501+'};
 const INSP_LBL={'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection','new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection'};
@@ -711,30 +627,48 @@ const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturda
 const ALL_SLOTS=['8:00 AM','8:30 AM','9:00 AM','9:30 AM','10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','1:00 PM','1:30 PM','2:00 PM','2:30 PM','3:00 PM'];
 const API='https://santanproperty-backend-production.up.railway.app/api';
 
-let BD={sqft:'',yr:0,type:'',addr:'',baseP:0,baseM:0,addons:[],totalP:0,totalM:0,date:null,dateStr:'',time:'',endTime:'',buyer:{},ba:{},sa:{},notes:''};
+let BD={sqft:'',yr:0,type:'',addr:'',baseP:0,baseM:0,addons:[],totalP:0,totalM:0,date:null,dateStr:'',time:'',endTime:'',buyer:{},ba:{},sa:{},notes:'',extraEmails:[]};
 
 function m2h(m){const h=Math.floor(m/60),r=m%60;if(!r)return h+'hr';if(r===15)return h+'hr 15min';if(r===30)return h+'hr 30min';if(r===45)return h+'hr 45min';return h+'hr '+r+'min';}
-
 function slotMins(s){const[t,p]=s.split(' ');let[h,m]=t.split(':').map(Number);if(p==='PM'&&h!==12)h+=12;if(p==='AM'&&h===12)h=0;return h*60+m;}
 function addMins(s,dm){const total=slotMins(s)+dm;const h=Math.floor(total/60)%24,m=total%60,p=h>=12?'PM':'AM',dh=h>12?h-12:h===0?12:h;return`${dh}:${String(m).padStart(2,'0')} ${p}`;}
 
+// ── EXTRA EMAIL RECIPIENTS ─────────────────────────────────────
+function addExtraEmail(){
+  const list=document.getElementById('extraEmailList');
+  const idx=list.children.length;
+  const row=document.createElement('div');
+  row.className='extra-email-row';
+  row.dataset.idx=idx;
+  row.innerHTML=`<input type="email" placeholder="additional@email.com" oninput="syncExtraEmails()"/><button class="btn-remove-email" type="button" onclick="removeExtraEmail(this)" title="Remove">×</button>`;
+  list.appendChild(row);
+  row.querySelector('input').focus();
+}
+function removeExtraEmail(btn){
+  btn.closest('.extra-email-row').remove();
+  syncExtraEmails();
+}
+function syncExtraEmails(){
+  BD.extraEmails=Array.from(document.querySelectorAll('#extraEmailList input')).map(i=>i.value.trim()).filter(Boolean);
+  if(document.getElementById('wp5').classList.contains('active'))buildSum();
+}
+
+// ── PRICING ────────────────────────────────────────────────────
 function calcPrice(){
   const sq=document.getElementById('sqft').value;
   const yr=parseInt(document.getElementById('yearBuilt').value)||0;
-  const type=BD.type||document.getElementById('inspType').value||'';
   if(!sq){document.getElementById('pbar1').style.display='none';return;}
   const b=BASE[sq]||{p:750,m:300};
   let p=b.p,m=b.m;
   if(yr>0&&yr<=1959){p+=80;m+=30;}
   else if(yr>=1960&&yr<=1980){p+=50;m+=30;}
-  BD.baseP=p;BD.baseM=m;BD.sqft=sq;BD.yr=yr;BD.type=type;
+  BD.baseP=p;BD.baseM=m;BD.sqft=sq;BD.yr=yr;
   document.getElementById('pb1price').textContent='$'+p;
   document.getElementById('pb1dur').textContent='⏱ '+m2h(m);
-  // Show age surcharge note
   const noteEl=document.getElementById('pb1note');
   if(noteEl){
-    if(yr>0&&yr<=1959) noteEl.textContent='Includes +$80 age surcharge (built 1959 or earlier)';
-    else if(yr>=1960&&yr<=1980) noteEl.textContent='Includes +$50 age surcharge (built 1960–1980)';
+    if(yr>0&&yr<=1959)noteEl.textContent='Includes +$80 age surcharge (built 1959 or earlier)';
+    else if(yr>=1960&&yr<=1980)noteEl.textContent='Includes +$50 age surcharge (built 1960–1980)';
     else noteEl.textContent='Add-ons below adjust total';
   }
   document.getElementById('pbar1').style.display='flex';
@@ -742,53 +676,29 @@ function calcPrice(){
 }
 
 function buildAcGrid(){
-  document.getElementById('acGrid').innerHTML=ADDONS.map(a=>`
-    <label class="ac" id="ac_${a.id}">
-      <input type="checkbox" id="cb_${a.id}">
-      <div class="ac-body"><strong>${a.icon} ${a.name}</strong><span>${a.desc}${a.m?` · +${a.m} min`:''}</span></div>
-      <div class="ac-price">+$${a.p}</div>
-    </label>`).join('');
-  document.querySelectorAll('.ac input[type=checkbox]').forEach(cb=>{
-    cb.addEventListener('change',function(){
-      this.closest('.ac').classList.toggle('ck',this.checked);
-      updateTotals();
-    });
-  });
+  document.getElementById('acGrid').innerHTML=ADDONS.map(a=>`<label class="ac" id="ac_${a.id}"><input type="checkbox" id="cb_${a.id}"><div class="ac-body"><strong>${a.icon} ${a.name}</strong><span>${a.desc}${a.m?` · +${a.m} min`:''}</span></div><div class="ac-price">+$${a.p}</div></label>`).join('');
+  document.querySelectorAll('.ac input[type=checkbox]').forEach(cb=>{cb.addEventListener('change',function(){this.closest('.ac').classList.toggle('ck',this.checked);updateTotals();});});
 }
 
-function slotToMins(slot){
-  const parts=slot.split(' ');const time=parts[0];const period=parts[1];
-  let hm=time.split(':');let h=parseInt(hm[0]);let m=parseInt(hm[1]);
-  if(period==='PM'&&h!==12)h+=12;
-  if(period==='AM'&&h===12)h=0;
-  return h*60+m;
-}
+function slotToMins(slot){const parts=slot.split(' ');const time=parts[0];const period=parts[1];let hm=time.split(':');let h=parseInt(hm[0]);let m=parseInt(hm[1]);if(period==='PM'&&h!==12)h+=12;if(period==='AM'&&h===12)h=0;return h*60+m;}
+
 function updateTotals(){
   let p=BD.baseP,m=BD.baseM;const sel=[];
   ADDONS.forEach(a=>{const cb=document.getElementById('cb_'+a.id);if(cb&&cb.checked){p+=a.p;m+=a.m;sel.push(a);}});
-  // Auto afternoon surcharge: May-Aug (months 4-7) + noon or later
   BD.heatSurcharge=false;
-  if(BD.date && BD.time){
-    const mo=BD.date.getMonth(); // 0-indexed
-    const slotMins=slotToMins(BD.time);
-    if(mo>=4 && mo<=7 && slotMins>=720){ // May=4, Aug=7, noon=720min
-      p+=50;
-      BD.heatSurcharge=true;
-    }
-  }
+  if(BD.date&&BD.time){const mo=BD.date.getMonth();const sm=slotToMins(BD.time);if(mo>=4&&mo<=7&&sm>=720){p+=50;BD.heatSurcharge=true;}}
   BD.addons=sel;BD.totalP=p;BD.totalM=m;
   const big=BD.sqft==='9999';
   document.getElementById('pb2price').textContent=big?'$750+':'$'+p;
   document.getElementById('pb2dur').textContent='⏱ '+m2h(m);
   const heatNote=BD.heatSurcharge?' · Incl. $50 summer afternoon surcharge':'';
   document.getElementById('pb2note').textContent=big?'Contact for final price on large homes':'Final price confirmed after review'+heatNote;
-  if(BD.time) updateEndDisplay();
+  if(BD.time)updateEndDisplay();
 }
 buildAcGrid();
 
 // ── CALENDAR ──────────────────────────────────────────────────
 let calDt=new Date(),selDate=null,selTime=null;
-
 function renderCal(){
   const y=calDt.getFullYear(),mo=calDt.getMonth();
   document.getElementById('calMo').textContent=MONTHS[mo]+' '+y;
@@ -797,18 +707,16 @@ function renderCal(){
   let h='';
   for(let i=0;i<first;i++)h+='<div class="cd empty"></div>';
   for(let d=1;d<=dim;d++){
-    const dt=new Date(y,mo,d);
-    const dk=dateKey(y,mo,d);
+    const dt=new Date(y,mo,d);const dk=dateKey(y,mo,d);
     const isSun=dt.getDay()===0,isPast=dt<today;
     const isGreen=SHIFT_GREEN.has(dk),isRed=SHIFT_RED.has(dk);
     const isSel=selDate&&dt.getTime()===selDate.getTime(),isToday=dt.getTime()===today.getTime();
     let c='cd';
     if(isPast||isSun||isGreen)c+=' past off';
     if(isRed&&!isPast&&!isSun)c+=' shift-red';
-    if(isSel)c+=' sel';
-    if(isToday)c+=' today';
+    if(isSel)c+=' sel';if(isToday)c+=' today';
     const canClick=!isPast&&!isSun&&!isGreen;
-    const oc=canClick?`onclick="pickDay(${y},${mo},${d})"` :'';
+    const oc=canClick?`onclick="pickDay(${y},${mo},${d})"`:'';
     const title=isGreen?'title="Unavailable — work day"':isRed?'title="Available from 9:00 AM"':'';
     h+=`<div class="${c}" ${oc} ${title}>${d}</div>`;
   }
@@ -824,48 +732,30 @@ async function pickDay(y,mo,d){
   document.getElementById('timeLbl').textContent=DAYS[selDate.getDay()]+', '+MONTHS[mo]+' '+d;
   const grid=document.getElementById('tGrid');
   grid.innerHTML='<div class="cal-load" style="grid-column:1/-1">Checking availability…</div>';
-  let booked=[], dayBlocked=false;
+  let booked=[],dayBlocked=false;
   try{const dur=BD.totalM||BD.baseM||360;const r=await fetch(`${API}/availability?date=${BD.dateStr}&duration=${dur}`);const data=await r.json();booked=data.booked||[];dayBlocked=data.dayBlocked||false;}catch(e){}
   const dur=BD.totalM||BD.baseM||90;
   const isRedDay=SHIFT_RED.has(BD.dateStr);
-  if(dayBlocked){
-    grid.innerHTML='<div class="cal-load" style="grid-column:1/-1;color:var(--warm-gray)">This day is unavailable for bookings.</div>';
-    return;
-  }
+  if(dayBlocked){grid.innerHTML='<div class="cal-load" style="grid-column:1/-1;color:var(--warm-gray)">This day is unavailable for bookings.</div>';return;}
   grid.innerHTML=ALL_SLOTS.filter(t=>!(isRedDay&&(t==='8:00 AM'||t==='8:30 AM'))).map(t=>{
-    const bk=booked.includes(t);
-    const end=addMins(t,dur);
+    const bk=booked.includes(t);const end=addMins(t,dur);
     return`<div class="ts${bk?' booked':''}" ${!bk?`onclick="pickTime(this,'${t}','${end}')"`:''}>${t}<span class="et">${bk?'Taken':'ends ~'+end}</span></div>`;
   }).join('');
   document.getElementById('dtInd').style.display='none';
 }
 
-function isAfternoonSurcharge(timeStr, dateObj){
-  if(!dateObj) return false;
-  const mo=dateObj.getMonth(); // 0=Jan, 4=May, 7=Aug
-  if(mo<4||mo>7) return false; // only May(4)–Aug(7)
-  const[tp,ampm]=timeStr.split(' ');
-  const hr=parseInt(tp.split(':')[0]);
-  const h24=(ampm==='PM'&&hr!==12)?hr+12:(ampm==='AM'&&hr===12)?0:hr;
-  return h24>=12; // noon or later = afternoon
+function isAfternoonSurcharge(timeStr,dateObj){
+  if(!dateObj)return false;const mo=dateObj.getMonth();if(mo<4||mo>7)return false;
+  const[tp,ampm]=timeStr.split(' ');const hr=parseInt(tp.split(':')[0]);
+  const h24=(ampm==='PM'&&hr!==12)?hr+12:(ampm==='AM'&&hr===12)?0:hr;return h24>=12;
 }
 
 function pickTime(el,t,end){
   document.querySelectorAll('.ts').forEach(s=>s.classList.remove('sel'));
   el.classList.add('sel');selTime=t;BD.time=t;BD.endTime=end;
-  // Auto-apply afternoon surcharge
   const afCb=document.getElementById('cb_afternoon');
   const afAc=document.getElementById('ac_afternoon');
-  if(afCb&&afAc){
-    const shouldCharge=isAfternoonSurcharge(t,selDate);
-    if(shouldCharge&&!afCb.checked){
-      afCb.checked=true;afAc.classList.add('ck');
-      showToast('☀️ Afternoon surcharge ($50) automatically applied for May–Aug.',false);
-    } else if(!shouldCharge&&afCb.checked){
-      afCb.checked=false;afAc.classList.remove('ck');
-    }
-    updateTotals();
-  }
+  if(afCb&&afAc){const shouldCharge=isAfternoonSurcharge(t,selDate);if(shouldCharge&&!afCb.checked){afCb.checked=true;afAc.classList.add('ck');showToast('☀️ Afternoon surcharge ($50) automatically applied for May–Aug.',false);}else if(!shouldCharge&&afCb.checked){afCb.checked=false;afAc.classList.remove('ck');}updateTotals();}
   updateEndDisplay();
   const d=selDate;
   document.getElementById('dtText').textContent=DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear()+' at '+t+' — ends approx. '+end;
@@ -873,66 +763,32 @@ function pickTime(el,t,end){
 }
 
 function updateEndDisplay(){
-  if(!BD.time)return;
-  const end=addMins(BD.time,BD.totalM||BD.baseM||90);
-  BD.endTime=end;
+  if(!BD.time)return;const end=addMins(BD.time,BD.totalM||BD.baseM||90);BD.endTime=end;
   document.getElementById('endNote').textContent=end;
-  // refresh time grid end times if visible
-  document.querySelectorAll('.ts:not(.booked)').forEach(el=>{
-    const t=el.textContent.split('\n')[0].trim().replace(/ends.*/,'').trim();
-    const eSpan=el.querySelector('.et');
-    if(eSpan&&t){try{eSpan.textContent='ends ~'+addMins(t,BD.totalM||BD.baseM||90);}catch(e){}}
-  });
+  document.querySelectorAll('.ts:not(.booked)').forEach(el=>{const t=el.textContent.split('\n')[0].trim().replace(/ends.*/,'').trim();const eSpan=el.querySelector('.et');if(eSpan&&t){try{eSpan.textContent='ends ~'+addMins(t,BD.totalM||BD.baseM||90);}catch(e){}}});
 }
 
 function prevMo(){calDt.setMonth(calDt.getMonth()-1);selDate=null;selTime=null;document.getElementById('timeSec').style.display='none';document.getElementById('timePH').style.display='block';document.getElementById('dtInd').style.display='none';renderCal();}
 function nextMo(){calDt.setMonth(calDt.getMonth()+1);selDate=null;selTime=null;document.getElementById('timeSec').style.display='none';document.getElementById('timePH').style.display='block';document.getElementById('dtInd').style.display='none';renderCal();}
 renderCal();
 
-// ── WIZARD NAV ──────────────────────────────────────────────────
+// ── WIZARD NAV ────────────────────────────────────────────────
 let curStep=1;
 function goStep(n){
   if(n>curStep&&!validate(curStep))return;
   document.getElementById('wp'+curStep).classList.remove('active');
   document.querySelectorAll('.ps').forEach(el=>{const s=parseInt(el.dataset.step);el.classList.toggle('active',s===n);el.classList.toggle('done',s<n);});
-  curStep=n;
-  document.getElementById('wp'+n).classList.add('active');
-  // Hide Google Maps autocomplete dropdown when not on step 1
-  const pac=document.querySelector('.pac-container');
-  if(pac){pac.style.display=(n===1)?'':'none';}
+  curStep=n;document.getElementById('wp'+n).classList.add('active');
+  const pac=document.querySelector('.pac-container');if(pac){pac.style.display=(n===1)?'':'none';}
   if(n===5){setTimeout(buildSum,50);}
   document.querySelector('.wiz-wrap').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 function validate(s){
-  // Step 1: address only
-  if(s===1){
-    const addr=document.getElementById('propAddr').value.trim();
-    if(!addr){document.getElementById('propAddr').classList.add('err');showToast('Please enter the property address.',true);return false;}
-    BD.addr=addr;return true;
-  }
-  // Step 2: inspection type
-  if(s===2){
-    const type=document.getElementById('inspType').value;
-    if(!type){document.getElementById('inspType').classList.add('err');showToast('Please select an inspection type.',true);return false;}
-    BD.type=type;return true;
-  }
-  // Step 3: sq ft + year required before scheduling
-  if(s===3){
-    const sq=document.getElementById('sqft').value;
-    const yr=document.getElementById('yearBuilt').value;
-    let ok=true;
-    if(!sq){document.getElementById('sqft').classList.add('err');ok=false;}
-    if(!yr){document.getElementById('yearBuilt').classList.add('err');ok=false;}
-    if(!ok){showToast('Please enter square footage and year built.',true);return false;}
-    BD.sqft=sq;BD.yr=parseInt(yr);calcPrice();return true;
-  }
-  // Step 4: must pick date + time
-  if(s===4){
-    if(!selDate){showToast('Please select a date.',true);return false;}
-    if(!selTime){showToast('Please select a time slot.',true);return false;}
-    return true;
-  }
+  if(s===1){const addr=document.getElementById('propAddr').value.trim();if(!addr){document.getElementById('propAddr').classList.add('err');showToast('Please enter the property address.',true);return false;}BD.addr=addr;return true;}
+  if(s===2){const type=document.getElementById('inspType').value;if(!type){document.getElementById('inspType').classList.add('err');showToast('Please select an inspection type.',true);return false;}BD.type=type;return true;}
+  if(s===3){const sq=document.getElementById('sqft').value;const yr=document.getElementById('yearBuilt').value;let ok=true;if(!sq){document.getElementById('sqft').classList.add('err');ok=false;}if(!yr){document.getElementById('yearBuilt').classList.add('err');ok=false;}if(!ok){showToast('Please enter square footage and year built.',true);return false;}BD.sqft=sq;BD.yr=parseInt(yr);calcPrice();return true;}
+  if(s===4){if(!selDate){showToast('Please select a date.',true);return false;}if(!selTime){showToast('Please select a time slot.',true);return false;}return true;}
   return true;
 }
 
@@ -942,13 +798,17 @@ document.querySelectorAll('input,select,textarea').forEach(el=>{
 });
 
 function buildSum(){
+  syncExtraEmails();
   const b=BD,d=b.date;
   const ds=d?DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear():'—';
   const addonNames=b.addons.map(a=>a.name);if(b.heatSurcharge)addonNames.push('☀️ Afternoon Surcharge (+$50)');const addonsStr=addonNames.length?addonNames.join(', '):'None';
-  const saLine=b.sa.name?`<div class="sr"><div class="sk">Seller's Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
+  const saLine=b.sa&&b.sa.name?`<div class="sr"><div class="sk">Seller's Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
   let yearNote='';
   if(b.yr<=1959)yearNote=' <small style="color:var(--gold)">(+$80 age surcharge)</small>';
   else if(b.yr>=1960&&b.yr<=1980)yearNote=' <small style="color:var(--gold)">(+$50 age surcharge)</small>';
+  const extraLine=b.extraEmails&&b.extraEmails.length?`<div class="sr"><div class="sk">Extra Recipients</div><div class="sv">${b.extraEmails.join(', ')}</div></div>`:'';
+  const discountLine=b.discount?`<div class="sr"><div class="sk" style="color:#0a6e35">Discount (${b.discount.code})</div><div class="sv" style="color:#0a6e35">−$${b.discount.amount} (${b.discount.pct}% off)</div></div>`:'';
+  const finalTotal=b.sqft==='9999'?'$750+':'$'+discountedTotal()+(b.potentialTripCharge?' + $50*':'');
   document.getElementById('sumBox').innerHTML=`
     <h4>Booking Summary</h4>
     <div class="sr"><div class="sk">Property</div><div class="sv">${b.addr}</div></div>
@@ -960,29 +820,59 @@ function buildSum(){
     <div class="sr"><div class="sk">Time</div><div class="sv">${b.time} — approx. ends ${b.endTime}</div></div>
     <div class="sr"><div class="sk">Duration</div><div class="sv">${m2h(b.totalM||b.baseM)}</div></div>
     <div style="height:1px;background:var(--border);margin:8px 0"></div>
-    <div class="sr"><div class="sk">Buyer</div><div class="sv">${b.buyer.firstName} ${b.buyer.lastName} · ${b.buyer.phone}</div></div>
-    <div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${b.ba.name}${b.ba.phone?' · '+b.ba.phone:''}</div></div>
-    ${saLine}
-    <div class="sum-total"><div class="sk">Estimated Total</div><div class="sv">${b.sqft==='9999'?'$750+':'$'+b.totalP+(b.potentialTripCharge?' + $50*':'')}</div></div>${b.potentialTripCharge?'<div style="font-size:.75rem;color:var(--warm-gray);margin-top:4px;text-align:right">*Trip charge confirmed by Jaren after booking review</div>':''}`;
+    <div class="sr"><div class="sk">Buyer</div><div class="sv">${b.buyer.firstName||''} ${b.buyer.lastName||''} · ${b.buyer.phone||''}</div></div>
+    <div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${b.ba&&b.ba.name?b.ba.name:''}${b.ba&&b.ba.phone?' · '+b.ba.phone:''}</div></div>
+    ${saLine}${extraLine}${discountLine}
+    <div class="sum-total"><div class="sk">Estimated Total</div><div class="sv">${finalTotal}</div></div>${b.potentialTripCharge?'<div style="font-size:.75rem;color:var(--warm-gray);margin-top:4px;text-align:right">*Trip charge confirmed by Jaren after booking review</div>':''}`;
 }
 
-// ── SUBMIT ──────────────────────────────────────────────────────
+// ── DISCOUNT CODES ────────────────────────────────────────────
+const DISCOUNT_CODES = {
+  'SAVE10': 10,
+  'SAVE20': 20,
+};
+// BD.discount = { code, pct, amount } or null
+BD.discount = null;
+
+function applyDiscount() {
+  const input = document.getElementById('discountCode');
+  const msg = document.getElementById('discountMsg');
+  const code = (input.value || '').trim().toUpperCase();
+  if (!code) { msg.className='discount-msg err'; msg.textContent='Please enter a code.'; return; }
+  if (!BD.totalP) { msg.className='discount-msg err'; msg.textContent='Please complete home details first (Step 3).'; return; }
+  const pct = DISCOUNT_CODES[code];
+  if (!pct) { msg.className='discount-msg err'; msg.textContent='That code isn\'t valid. Check the spelling and try again.'; BD.discount=null; buildSum(); return; }
+  const amount = Math.round(BD.totalP * pct / 100);
+  BD.discount = { code, pct, amount };
+  msg.className='discount-msg ok'; msg.textContent=pct+'% discount applied — saving $'+amount+'!';
+  buildSum();
+}
+
+function discountedTotal() {
+  if (!BD.discount) return BD.totalP;
+  return BD.totalP - BD.discount.amount;
+}
 async function submitBooking(){
   const btn=document.getElementById('confBtn');
   btn.classList.add('loading');btn.disabled=true;
-  // Collect contacts from step 5 fields
   const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"],['baName',"Buyer's agent name"],['baPhone',"Buyer's agent phone"]];
   for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;return;}}
   BD.buyer={firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),phone:document.getElementById('bPhone').value.trim(),email:document.getElementById('bEmail').value.trim()};
   BD.ba={name:document.getElementById('baName').value.trim(),brokerage:document.getElementById('baBrok').value.trim(),phone:document.getElementById('baPhone').value.trim(),email:document.getElementById('baEmail').value.trim()};
   BD.sa={name:document.getElementById('saName').value.trim(),brokerage:document.getElementById('saBrok').value.trim(),phone:document.getElementById('saPhone').value.trim(),email:document.getElementById('saEmail').value.trim()};
   BD.notes=document.getElementById('notes').value.trim();
+  syncExtraEmails();
   const b=BD;
   const payload={
     address:b.addr,sqft:b.sqft,yearBuilt:b.yr,inspType:b.type,
-    addons:[...b.addons.map(a=>a.name),...(b.heatSurcharge?['Afternoon Surcharge (May-Aug)']:[])] ,totalPrice:b.totalP,totalMins:b.totalM||b.baseM,
+    addons:[...b.addons.map(a=>a.name),...(b.heatSurcharge?['Afternoon Surcharge (May-Aug)']:[])],
+    totalPrice:discountedTotal(),totalMins:b.totalM||b.baseM,
     date:b.dateStr,time:b.time,endTime:b.endTime,
     buyer:b.buyer,buyerAgent:b.ba,sellerAgent:b.sa,notes:b.notes,
+    extraEmails:b.extraEmails,
+    discountCode:b.discount?b.discount.code:null,
+    discountPct:b.discount?b.discount.pct:null,
+    discountAmount:b.discount?b.discount.amount:null,
   };
   try{
     const r=await fetch(`${API}/book`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1002,49 +892,29 @@ async function submitBooking(){
 function closeModal(){document.getElementById('succMod').classList.remove('active');}
 document.getElementById('succMod').addEventListener('click',function(e){if(e.target===this)closeModal();});
 
-// ── SERVICE AREA CHECK ────────────────────────────────────────────────
+// ── SERVICE AREA ──────────────────────────────────────────────
 const PRIMARY_CITIES=['chandler','gilbert','mesa','tempe','queen creek','san tan valley','florence','apache junction'];
-
 function checkServiceArea(){
   const addr=(document.getElementById('propAddr').value||'').toLowerCase();
-  const warn=document.getElementById('tripWarn');
-  const ok=document.getElementById('tripOk');
+  const warn=document.getElementById('tripWarn');const ok=document.getElementById('tripOk');
   if(!addr||addr.length<5){warn.style.display='none';ok.style.display='none';return;}
   const inArea=PRIMARY_CITIES.some(c=>addr.includes(c));
   if(inArea){warn.style.display='none';ok.style.display='block';BD.potentialTripCharge=false;}
   else{warn.style.display='block';ok.style.display='none';BD.potentialTripCharge=true;}
 }
 
-// ── GOOGLE PLACES AUTOCOMPLETE ────────────────────────────────
 function initAutocomplete(){
   const input=document.getElementById('propAddr');
   if(!input||typeof google==='undefined')return;
-  const ac=new google.maps.places.Autocomplete(input,{
-    types:['address'],
-    componentRestrictions:{country:'us'},
-    fields:['formatted_address']
-  });
-  ac.addListener('place_changed',function(){
-    const place=ac.getPlace();
-    if(place.formatted_address){
-      input.value=place.formatted_address;
-      input.classList.remove('err');
-      checkServiceArea();
-    }
-  });
+  const ac=new google.maps.places.Autocomplete(input,{types:['address'],componentRestrictions:{country:'us'},fields:['formatted_address']});
+  ac.addListener('place_changed',function(){const place=ac.getPlace();if(place.formatted_address){input.value=place.formatted_address;input.classList.remove('err');checkServiceArea();}});
 }
 window.initAutocomplete=initAutocomplete;
 
-function showToast(msg,isErr=false){
-  const t=document.getElementById('toast');
-  t.textContent=msg;t.className='toast'+(isErr?' err':'');
-  void t.offsetWidth;t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),3800);
-}
+function showToast(msg,isErr=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');void t.offsetWidth;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3800);}
 document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){const t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
 </script>
 
-<!-- Privacy Policy Page (hidden, shown via URL hash) -->
 <div id="privacy-policy" style="display:none;max-width:800px;margin:80px auto;padding:40px;font-family:Georgia,serif;color:#333;line-height:1.8;">
   <h1 style="color:#1B2D52;">Privacy Policy</h1>
   <p><strong>Last updated:</strong> April 2026</p>
@@ -1062,7 +932,6 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
   <p><a href="/" style="color:#1B2D52;">← Back to Home</a></p>
 </div>
 
-<!-- Terms and Conditions Page (hidden, shown via URL hash) -->
 <div id="terms-and-conditions" style="display:none;max-width:800px;margin:80px auto;padding:40px;font-family:Georgia,serif;color:#333;line-height:1.8;">
   <h1 style="color:#1B2D52;">Terms and Conditions</h1>
   <p><strong>Last updated:</strong> April 2026</p>
@@ -1074,7 +943,7 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
   <h2>Payments</h2>
   <p>Payment is due at time of service. We accept Square, Venmo, Zelle, and cash.</p>
   <h2>Cancellations</h2>
-  <p>Please provide 24-hour notice for cancellations. Failure to have utilities on at time of inspection will result in a 25 re-inspection fee.</p>
+  <p>Please provide 24-hour notice for cancellations. Failure to have utilities on at time of inspection will result in a $125 re-inspection fee.</p>
   <h2>Limitation of Liability</h2>
   <p>Our inspection reports reflect conditions at the time of inspection. We are not liable for conditions that develop after the inspection date.</p>
   <h2>Contact</h2>
@@ -1083,18 +952,9 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
 </div>
 
 <script>
-// Show privacy/terms pages based on URL hash
-function checkHash() {
-  var hash = window.location.hash.replace("#", "");
-  var sections = ["privacy-policy", "terms-and-conditions"];
-  var mainContent = document.querySelector(".hero") || document.querySelector("nav");
-  sections.forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.style.display = (hash === id) ? "block" : "none";
-  });
-}
-window.addEventListener("hashchange", checkHash);
-window.addEventListener("load", checkHash);
+function checkHash(){var hash=window.location.hash.replace("#","");var sections=["privacy-policy","terms-and-conditions"];sections.forEach(function(id){var el=document.getElementById(id);if(el)el.style.display=(hash===id)?"block":"none";});}
+window.addEventListener("hashchange",checkHash);
+window.addEventListener("load",checkHash);
 </script>
 <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBCNujdEjf3Gw51CJF1gPuANtaS_2_LOdI&libraries=places&callback=initAutocomplete" async defer></script>
 </body>
