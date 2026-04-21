@@ -192,7 +192,7 @@ app.get('/api/availability', async function(req, res) {
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
 
   const inspDuration   = parseInt(req.query.duration) || 360;
-  const BUFFER_MINS    = 120;
+  const BUFFER_MINS    = 90; // 1.5 hour buffer between inspections
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
   try {
@@ -401,6 +401,10 @@ app.get('/confirm/:token', async function(req, res) {
   const tripLineBuyer = tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '';
 
   const buyerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
+    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+    + '</div>'
     + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
     + '<p>Hi ' + buyer.firstName + ', here are your booking details:</p>'
     + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -436,6 +440,10 @@ app.get('/confirm/:token', async function(req, res) {
 
   if (extraEmails && extraEmails.length) {
     const extraHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
+    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+    + '</div>'
       + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
       + '<p>You have been added as a report recipient for the following inspection:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -461,6 +469,10 @@ app.get('/confirm/:token', async function(req, res) {
 
   if (buyerAgent && buyerAgent.email) {
     const baHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
+    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+    + '</div>'
       + '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'
       + '<p>Hi ' + buyerAgent.name + ',</p>'
       + '<p>The inspection for your buyer has been confirmed. Details below:</p>'
@@ -484,6 +496,10 @@ app.get('/confirm/:token', async function(req, res) {
 
   if (sellerAgent && sellerAgent.email) {
     const sellerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
+    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+    + '</div>'
       + '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'
       + '<p>Hi ' + (sellerAgent.name || 'there') + ',</p>'
       + '<p>A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:</p>'
