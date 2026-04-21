@@ -666,11 +666,16 @@ app.post('/api/contact', async function(req, res) {
 
   try {
     await sendEmail(process.env.OWNER_EMAIL, 'CONTACT: ' + name + ' (' + roleLabel + ')', html);
-    res.json({ success: true });
   } catch(e) {
     console.error('Contact form email:', e.message);
     res.status(500).json({ error: 'Could not send message. Please call or email directly.' });
+    return;
   }
+
+  const contactSms = 'NEW CONTACT FORM\n' + name + ' (' + roleLabel + ')' + (phone ? '\n' + phone : '') + '\n' + email + '\n\n' + message;
+  sms(process.env.OWNER_PHONE, contactSms).catch(function(e){ console.error('Contact SMS:', e.message); });
+
+  res.json({ success: true });
 });
 
 // ── RESCHEDULE REQUEST ───────────────────────────────────────
