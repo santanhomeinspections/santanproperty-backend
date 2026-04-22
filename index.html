@@ -4,8 +4,18 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>San Tan Property Inspections – East Valley, AZ</title>
-<meta name="description" content="Professional home inspections in Gilbert, Chandler, Queen Creek, Mesa and the East Valley. Same-day reports. Book online instantly."/>
+<meta name="description" content="Licensed home inspector serving Gilbert, Chandler, Mesa, Queen Creek and the East Valley. Same-day reports, online booking, termite inspections. Call (480) 418-7633."/>
 <link rel="canonical" href="https://santanpropertyinspections.com"/>
+<meta property="og:type" content="website"/>
+<meta property="og:url" content="https://santanpropertyinspections.com"/>
+<meta property="og:title" content="San Tan Property Inspections — East Valley, AZ"/>
+<meta property="og:description" content="Professional home inspections in Gilbert, Chandler, Queen Creek, Mesa and the East Valley. Licensed inspector, same-day reports, online booking."/>
+<meta property="og:image" content="https://santanpropertyinspections.com/logo-gold.jpg"/>
+<meta property="og:image:width" content="300"/>
+<meta property="og:image:height" content="175"/>
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="San Tan Property Inspections — East Valley, AZ"/>
+<meta name="twitter:description" content="Professional home inspections in the East Valley. Licensed, same-day reports, book online instantly."/>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 175'%3E%3Crect width='300' height='175' fill='%230F1C35'/%3E%3Cpolygon points='10,135 70,55 130,135' fill='%23C9A84C'/%3E%3Cpolygon points='170,135 230,55 290,135' fill='%23C9A84C'/%3E%3Cpolygon points='80,135 150,22 220,135' fill='%23B8962A'/%3E%3Crect x='128' y='82' width='44' height='36' fill='%231B2D52'/%3E%3Cpolygon points='120,84 150,62 180,84' fill='%231B2D52'/%3E%3Crect x='143' y='100' width='14' height='18' fill='%23C9A84C'/%3E%3C/svg%3E"/>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -1108,7 +1118,7 @@ async function submitBooking(){
       <div class="mr"><div class="mk">Date & Time</div><div class="mv">${ds} at ${b.time}</div></div>
       <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${data.confirmationId}</div></div>`;
     document.getElementById('succMod').classList.add('active');
-  }catch(e){showToast(e.message||'Something went wrong. Please call us.',true);}
+  }catch(e){showToast(e.message||'Booking unavailable — please call or text (480) 418-7633 to schedule.',true);}
   finally{
     btn.classList.remove('loading');
     if(!document.getElementById('succMod').classList.contains('active')){
