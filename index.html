@@ -221,6 +221,9 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
 .md .mk{color:var(--warm-gray);}
 .md .mv{color:var(--navy-dark);font-weight:600;}
 
+.scroll-top{position:fixed;bottom:24px;right:24px;width:42px;height:42px;background:var(--gold);color:var(--navy-dark);border:none;border-radius:50%;cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(201,168,76,.4);opacity:0;transform:translateY(10px);transition:all .3s;z-index:999;pointer-events:none;}
+.scroll-top.visible{opacity:1;transform:translateY(0);pointer-events:all;}
+.scroll-top:hover{background:var(--gold-light);transform:translateY(-2px);}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--navy-dark);color:var(--white);padding:10px 20px;border-radius:8px;font-size:.86rem;font-weight:600;border-left:4px solid var(--gold);box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:10000;transition:transform .3s ease;white-space:nowrap;}
 .toast.show{transform:translateX(-50%) translateY(0);}
 .toast.err{border-color:var(--error);}
@@ -254,8 +257,11 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   .fr2{grid-template-columns:1fr;}
 }
 @media(max-width:700px){
-  #what-to-expect .container>div:first-child+div>div[style*='grid-template-columns:repeat(4']{grid-template-columns:1fr!important;}
-  #agents>div>div>div[style*='grid-template-columns:1fr 1fr']{grid-template-columns:1fr!important;}
+  .step-grid{grid-template-columns:1fr 1fr!important;gap:28px!important;}
+  .step-line{display:none!important;}
+}
+@media(max-width:420px){
+  .step-grid{grid-template-columns:1fr!important;}
 }
 
 /* Discount code */
@@ -298,8 +304,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   <a href="#" class="nav-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 175" height="44" style="width:auto"><polygon points="10,135 70,55 130,135" fill="#C9A84C"/><polygon points="170,135 230,55 290,135" fill="#C9A84C"/><polygon points="80,135 150,22 220,135" fill="#B8962A"/><polygon points="140,22 150,22 160,40 130,40" fill="#F0ECD8" opacity="0.85"/><polygon points="63,55 70,55 77,67 56,67" fill="#F0ECD8" opacity="0.85"/><polygon points="223,55 230,55 237,67 216,67" fill="#F0ECD8" opacity="0.85"/><rect x="128" y="82" width="44" height="36" fill="#1B2D52"/><polygon points="120,84 150,62 180,84" fill="#1B2D52"/><rect x="143" y="100" width="14" height="18" fill="#C9A84C"/><rect x="131" y="87" width="10" height="9" fill="#C9A84C" opacity="0.7"/><rect x="159" y="87" width="10" height="9" fill="#C9A84C" opacity="0.7"/><text x="150" y="155" text-anchor="middle" font-family="Georgia,serif" font-weight="700" font-size="19" fill="#C9A84C" letter-spacing="2">SAN TAN PROPERTY</text><text x="150" y="170" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#E8C97A" letter-spacing="4">INSPECTIONS</text></svg></a>
   <ul class="nav-links" id="navLinks">
     <li><a href="#pricing">Pricing</a></li>
-    <li><a href="#why">Why Us</a></li>
-    <li><a href="#payment">Payment</a></li>
+    <li><a href="#what-to-expect">How It Works</a></li>
     <li><a href="#contact">Contact</a></li>
     <li><a href="#booking" class="nav-cta">Book Now</a></li>
   </ul>
@@ -382,9 +387,9 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <h2 class="stitle" style="color:var(--white);">What to Expect</h2>
       <p style="color:#8A9AB5;font-size:1rem;max-width:500px;margin:0 auto;line-height:1.7;">From booking to report delivery — here's exactly how it works.</p>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;max-width:960px;margin:0 auto;position:relative;">
-      <!-- Connecting line -->
-      <div style="position:absolute;top:28px;left:calc(12.5% + 14px);right:calc(12.5% + 14px);height:2px;background:linear-gradient(90deg,var(--gold),rgba(201,168,76,.3));z-index:0;"></div>
+    <div class="step-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;max-width:960px;margin:0 auto;position:relative;">
+      <!-- Connecting line desktop -->
+      <div class="step-line" style="position:absolute;top:28px;left:calc(12.5% + 14px);right:calc(12.5% + 14px);height:2px;background:linear-gradient(90deg,var(--gold),rgba(201,168,76,.3));z-index:0;"></div>
       <!-- Step 1 -->
       <div style="text-align:center;padding:0 16px;position:relative;z-index:1;">
         <div style="width:56px;height:56px;border-radius:50%;background:var(--gold);color:var(--navy-dark);font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;">1</div>
@@ -462,6 +467,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <div class="contact-info">
         <h3>Questions? We're happy to help.</h3>
         <p style="font-size:.88rem;color:var(--warm-gray);line-height:1.7;margin-bottom:24px">Whether you're a buyer, agent, or seller with questions about the inspection process, pricing, or scheduling — reach out and we'll get back to you quickly.</p>
+        <p style="font-size:.82rem;color:var(--warm-gray);margin-bottom:24px;">Ready to schedule? <a href="#booking" style="color:var(--gold);font-weight:600;">Book online directly →</a></p>
         <div class="contact-detail">
           <span class="ci">📞</span>
           <div><strong>Call or Text</strong><a href="tel:+14804187633">(480) 418-7633</a></div>
@@ -702,6 +708,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
             📞 Questions or need to reschedule? Contact <strong>San Tan Property Inspections</strong> at <strong>(480) 418-7633</strong> or <strong>santanpropertyinspections@gmail.com</strong>
           </div>
           <div style="font-size:.8rem;color:var(--warm-gray);margin-bottom:18px">💳 <strong style="color:var(--navy-dark)">Payment</strong> collected day-of inspection. We accept Square, Venmo, Zelle, and cash.</div>
+          <p style="text-align:right;font-size:.78rem;color:var(--gold);font-weight:600;margin-top:16px;margin-bottom:-8px;">🎉 Last step — you're almost done!</p>
           <div class="wnav">
             <button class="btn-back" onclick="goStep(4)">← Back</button>
             <button class="btn-next" id="confBtn" onclick="submitBooking()"><span id="confBtnText">Confirm Booking</span> <div class="spin"></div></button>
@@ -765,6 +772,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <button class="btn-p" style="width:100%;margin-top:11px" onclick="closeModal()" type="button">Done!</button>
   </div>
 </div>
+<button class="scroll-top" id="scrollTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="Back to top">↑</button>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1158,6 +1166,12 @@ async function submitContact(){
     btn.disabled=false;
   }finally{if(spin)spin.style.display='none';}
 }
+
+// Scroll to top button
+window.addEventListener('scroll',function(){
+  const btn=document.getElementById('scrollTop');
+  if(btn){btn.classList.toggle('visible',window.scrollY>400);}
+});
 
 function showToast(msg,isErr=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');void t.offsetWidth;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3800);}
 document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){const t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
