@@ -1337,14 +1337,14 @@ async function load() {
         const isCancelled = !!b.cancelled_at;
         const isSigned = !!b.agreement_signed_at;
         const signedBadge = isCancelled ? '' : (isSigned
-          ? '<span class="badge badge-signed" title="Signed: '+new Date(b.agreement_signed_at).toLocaleDateString()+'">Signed</span>'
+          ? '<span class="badge badge-signed">Signed</span>'
           : '<span class="badge badge-unsigned">Unsigned</span>');
         const paidBtn = isCancelled
           ? '<span style="color:#C0392B;font-size:.72rem;font-weight:700">CANCELLED</span>'
           : (isPaid
-            ? '<button onclick="markUnpaid(\''+bd.confId+'\')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
-            : '<button onclick="markPaid(\''+bd.confId+'\')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
-        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(\''+bd.confId+'\')" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
+            ? '<button data-action="unpaid" data-id="'+bd.confId+'" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
+            : '<button data-action="paid" data-id="'+bd.confId+'" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
+        const cancelBtn = isCancelled ? '' : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
@@ -1419,6 +1419,17 @@ async function deleteCode(code) {
   await fetch('/admin/codes/delete', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({code}) });
   load();
 }
+
+// Event delegation for booking action buttons
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const id = btn.dataset.id;
+  if (action === 'paid') markPaid(id);
+  if (action === 'unpaid') markUnpaid(id);
+  if (action === 'cancel') cancelBooking(id);
+});
 
 load();
 setInterval(load, 60000);
