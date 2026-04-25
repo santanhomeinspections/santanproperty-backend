@@ -1300,10 +1300,10 @@ async function load() {
     const r = await fetch('/admin/data');
     const d = await r.json();
 
-    const totalRev = d.bookings.reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
+    const totalRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
     const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
     const monthJobs = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).length;
-    const monthRev  = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
+    const monthRev  = d.bookings.filter(function(b){ return b.paid_at && new Date(b.confirmed_at) >= thisMonth; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
     const agentCount = {};
     d.bookings.forEach(function(b){ const n=b.data.buyerAgent&&b.data.buyerAgent.name?b.data.buyerAgent.name:'Unknown'; agentCount[n]=(agentCount[n]||0)+1; });
     const topAgent = Object.entries(agentCount).sort(function(a,b){return b[1]-a[1];})[0];
@@ -1313,9 +1313,9 @@ async function load() {
 
     document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+d.bookings.length+'</div><div class="sub">all time</div></div>' +
-      '<div class="stat"><div class="lbl">Total Revenue</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">all time</div></div>' +
+      '<div class="stat"><div class="lbl">Total Collected</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">paid jobs only</div></div>' +
       '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+d.bookings.filter(function(b){return b.paid_at;}).length+' jobs paid</div></div>' +
-      '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' revenue</div></div>' +
+      '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' collected</div></div>' +
       '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
       '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
       '<div class="stat"><div class="lbl">Unsigned Agreements</div><div class="val" style="color:'+(unsignedCount>0?'#e8a87c':'#1ab464')+'">'+unsignedCount+'</div><div class="sub">pending signature</div></div>' +
