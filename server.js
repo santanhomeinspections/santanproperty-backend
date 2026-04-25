@@ -1344,7 +1344,7 @@ async function load() {
           : (isPaid
             ? '<button onclick="markUnpaid(\''+bd.confId+'\')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
             : '<button onclick="markPaid(\''+bd.confId+'\')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
-        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(\''+bd.confId+'\',\''+(bd.fullName||'').replace(/\'/g,'')+'\' )" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
+        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(\''+bd.confId+'\')" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
@@ -1376,8 +1376,8 @@ async function load() {
   } catch(e) { console.error(e); }
 }
 
-async function cancelBooking(confId, name) {
-  if (!confirm('Cancel the booking for ' + name + ' (' + confId + ')? This will delete the calendar event and email the buyer and agent.')) return;
+async function cancelBooking(confId) {
+  if (!confirm('Cancel booking ' + confId + '? This will delete the calendar event and email the buyer and agent.')) return;
   const r = await fetch('/admin/cancel-booking', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
   const data = await r.json();
   if (data.success) { alert('Booking cancelled. Cancellation emails sent.'); load(); }
