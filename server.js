@@ -1087,7 +1087,13 @@ app.post('/agreement/:token/sign', async function(req, res) {
 });
 
 // API for inspector app to check agreement status before sending report
+// Requires x-internal-key header matching INTERNAL_API_KEY env variable
 app.get('/api/agreement-status/:confId', async function(req, res) {
+  const key = req.headers['x-internal-key'];
+  if (!key || key !== process.env.INTERNAL_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
     const r = await pool.query(
       'SELECT agreement_signed_at, agreement_signature, agreement_pdf_key FROM confirmed_bookings WHERE conf_id = $1',
