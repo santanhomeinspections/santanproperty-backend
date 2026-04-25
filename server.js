@@ -1400,7 +1400,7 @@ function renderCodes(codes) {
   el.innerHTML = '<table><thead><tr><th>Code</th><th>Discount</th><th>Action</th></tr></thead><tbody>' +
     codes.map(function(c) {
       return '<tr><td><span class="conf">'+c.code+'</span></td><td class="price">'+c.pct+'% off</td>' +
-        '<td><button onclick="deleteCode(\''+c.code+'\')" style="background:#C0392B;color:white;border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font-size:.75rem">Remove</button></td></tr>';
+        '<td><button data-action="deletecode" data-code="'+c.code+'" style="background:#C0392B;color:white;border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font-size:.75rem">Remove</button></td></tr>';
     }).join('') + '</tbody></table>';
 }
 
@@ -1426,9 +1426,11 @@ document.addEventListener('click', function(e) {
   if (!btn) return;
   const action = btn.dataset.action;
   const id = btn.dataset.id;
+  const code = btn.dataset.code;
   if (action === 'paid') markPaid(id);
   if (action === 'unpaid') markUnpaid(id);
   if (action === 'cancel') cancelBooking(id);
+  if (action === 'deletecode') deleteCode(code);
 });
 
 load();
