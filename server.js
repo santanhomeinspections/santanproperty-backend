@@ -1,6 +1,6 @@
 /**
- * San Tan Property Inspections — Backend Server v2
- * Postgres-backed pending bookings
+ * San Tan Property Inspections — Backend Server v3
+ * + Agreement signature flow (sign online, PDF to R2, DB tracking)
  */
 
 require('dotenv').config();
@@ -15,6 +15,7 @@ const app  = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cors({
   origin: [
     'https://santanpropertyinspections.com',
@@ -53,9 +54,15 @@ async function initDb() {
         paid_at      TIMESTAMPTZ DEFAULT NULL
       )
     `);
-    // Add paid_at column if it doesn't exist (for existing deployments)
+    // Add columns for existing deployments
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ DEFAULT NULL`);
+    // Agreement signature columns
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_sent_at TIMESTAMPTZ DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_signed_at TIMESTAMPTZ DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_signature TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_ip TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_pdf_key TEXT DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -74,7 +81,6 @@ async function initDb() {
         created_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    // Seed default codes if table is empty
     await pool.query(`
       INSERT INTO discount_codes (code, pct) VALUES ('SAVE10', 10), ('SAVE20', 20)
       ON CONFLICT (code) DO NOTHING
@@ -167,7 +173,7 @@ async function checkTripCharge(address) {
     const encoded = encodeURIComponent(address);
     const url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encoded + '&key=' + process.env.GOOGLE_MAPS_API_KEY;
     const controller = new AbortController();
-    const timeout = setTimeout(function(){ controller.abort(); }, 4000); // 4 second timeout
+    const timeout = setTimeout(function(){ controller.abort(); }, 4000);
     const r = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     const data = await r.json();
@@ -183,27 +189,353 @@ async function checkTripCharge(address) {
 // ── EMAIL ─────────────────────────────────────────────────────
 async function sendEmail(to, subject, html) {
   try {
-    const emailController = new AbortController();
-    const emailTimeout = setTimeout(function(){ emailController.abort(); }, 8000);
+    const controller = new AbortController();
+    const timeout = setTimeout(function(){ controller.abort(); }, 8000);
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      signal: emailController.signal,
+      signal: controller.signal,
       headers: {
         'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
+        reply_to: 'santanpropertyinspections@gmail.com',
         to: to,
         subject: subject,
         html: html,
       }),
     });
-    clearTimeout(emailTimeout);
+    clearTimeout(timeout);
     const data = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(data));
     return data;
   } catch(e) { throw e; }
+}
+
+// ── EMAIL HELPERS ─────────────────────────────────────────────
+const EMAIL_HEADER = '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
+  + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+  + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+  + '</div>';
+
+const EMAIL_FOOTER = '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+  + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections &nbsp;&middot;&nbsp; San Tan Valley, AZ &nbsp;&middot;&nbsp; santanpropertyinspections.com</p>';
+
+function emailWrap(content) {
+  return '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+    + EMAIL_HEADER + content + EMAIL_FOOTER + '</div>';
+}
+
+// ── R2 UPLOAD ─────────────────────────────────────────────────
+async function uploadToR2(key, buffer, contentType) {
+  // Uses AWS-compatible S3 API that R2 supports
+  const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+  const client = new S3Client({
+    region: 'auto',
+    endpoint: process.env.R2_ENDPOINT,
+    credentials: {
+      accessKeyId:     process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  await client.send(new PutObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    Key:    key,
+    Body:   buffer,
+    ContentType: contentType,
+  }));
+  return key;
+}
+
+// ── AGREEMENT TEXT ────────────────────────────────────────────
+// Versioned agreement text — stored with each signed record
+const AGREEMENT_VERSION = '2025-v1';
+const AGREEMENT_TEXT = `SAN TAN PROPERTY INSPECTIONS
+Licensed Home Inspector — License #79346
+Jaren Drummond
+823 W Leadwood Ave, San Tan Valley, AZ 85140
+(480) 418-7633 | santanpropertyinspections@gmail.com | santanpropertyinspections.com
+
+HOME INSPECTION AGREEMENT
+
+1. SCOPE OF INSPECTION
+The Inspector will perform a non-invasive visual inspection of the accessible systems and components of the property in accordance with the Standards of Professional Practice for Arizona Home Inspectors as adopted by the Arizona State Board of Technical Registration (available at btr.az.gov). The inspection will produce a written report identifying material defects observed at the time of inspection. The report will be delivered the same day as the inspection.
+
+The standard inspection covers: Roof; Exterior; Electrical System; Plumbing System; Basement, Foundation and Structure; Garage; Heating and Cooling; Doors, Windows and Interior; Insulation and Ventilation; Built-In Kitchen Appliances.
+
+Any add-on services (such as pool, fireplace, infrared camera inspection, or outbuilding) are performed in addition to the standard inspection and are subject to the same terms of this Agreement. Add-on services must be agreed upon in writing prior to the inspection and are reflected in the booking confirmation.
+
+Only components with normal user controls and accessible under safe conditions will be operated. The inspection is a visual examination only and does not include destructive testing, dismantling of components, or moving of personal property.
+
+2. EXCLUSIONS
+Unless separately agreed to in writing, the following are NOT included in this inspection: Environmental hazards (radon, mold, asbestos, lead paint or pipes, soil contamination, or other pollutants); Code compliance, zoning compliance, or permit verification; Termites or wood-destroying organisms; Cosmetic or aesthetic conditions that do not affect function or safety; Auxiliary systems (alarm, solar, intercom, central vacuum, water softener, reverse osmosis systems, sprinkler or mister systems); The presence, condition, or certification of smoke detectors or carbon monoxide detectors beyond visual observation of presence; Product recalls; Areas inaccessible due to obstructions; Swimming pools or spas unless the pool add-on is purchased; Detached structures unless the outbuilding add-on is purchased; Fireplaces and chimneys unless the fireplace add-on is purchased.
+
+The Inspector is a property generalist and does not act as a licensed engineer or specialist in any trade.
+
+3. REPORT
+The report is prepared for the sole use and benefit of the Client. The report is not a guarantee, warranty, or substitute for seller disclosure. The report will not be released until both: (1) this Agreement has been signed by the Client, and (2) full payment of the inspection fee has been received.
+
+4. PAYMENT
+The inspection fee is due and payable on the day of inspection. Accepted forms of payment: cash, Venmo, Zelle, or Square (credit/debit). The report will not be released until payment is received in full.
+
+5. RE-INSPECTION AND CANCELLATION
+A $125.00 re-inspection fee applies if utilities are not on and accessible at the time of the scheduled inspection. Please provide at least 24 hours notice for cancellations or rescheduling.
+
+6. LIMITATION OF LIABILITY
+The Inspector assumes no liability for the cost of repair or replacement of unreported defects. The Inspector's total liability is limited to a refund of the inspection fee paid. Client waives any claim for consequential, exemplary, special, or incidental damages or for loss of use of the property.
+
+7. CLAIMS PROCEDURE
+Client must: (1) provide written notification within 10 days of discovery; and (2) provide the Inspector with access for re-inspection before any repairs are made, except in cases of emergency where Client shall notify the Inspector in writing within 24 hours of such emergency repair. No legal action may be filed more than one (1) year after the date of inspection.
+
+8. DISPUTE RESOLUTION
+Any dispute not resolved by refund of the inspection fee shall be resolved by arbitration. At least one arbitrator must be an Arizona Certified Home Inspector with at least five years of experience. The prevailing party shall be awarded attorney's fees and arbitration costs. Client waives trial by jury.
+
+9. ELECTRONIC SIGNATURE
+An electronic signature shall be deemed valid and binding to the same extent as a handwritten signature.
+
+10. GENERAL PROVISIONS
+This Agreement constitutes the entire agreement between the parties. If any provision is found invalid, the remaining provisions remain in effect.
+
+Agreement Version: ${AGREEMENT_VERSION}`;
+
+// ── AGREEMENT PAGE ────────────────────────────────────────────
+function buildAgreementPage(booking, token, opts = {}) {
+  const { confId, address, date, time, dateFmt, fullName, buyer, addonsLine, finalPrice } = booking;
+  const { signed = false, error = null } = opts;
+
+  const addonsDisplay = addonsLine && addonsLine !== 'None' ? addonsLine : null;
+
+  if (signed) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Agreement Signed — San Tan Property Inspections</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+.card{background:#fff;border-radius:16px;padding:40px 36px;max-width:500px;width:100%;text-align:center;box-shadow:0 28px 70px rgba(0,0,0,.4);}
+.logo{background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:28px;}
+.logo-title{font-family:Georgia,serif;font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:2px;}
+.logo-sub{font-family:Georgia,serif;font-size:.65rem;color:#E8C97A;letter-spacing:4px;margin-top:3px;}
+.check{width:64px;height:64px;background:#e8f7ee;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:2rem;}
+h1{font-family:Georgia,serif;color:#1B2D52;margin-bottom:8px;}
+p{color:#666;line-height:1.6;margin-bottom:12px;font-size:.9rem;}
+.conf{background:#FAF7F0;border-radius:8px;padding:12px 16px;margin:16px 0;font-size:.85rem;color:#555;}
+.conf strong{color:#1B2D52;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-title">SAN TAN PROPERTY</div>
+    <div class="logo-sub">INSPECTIONS</div>
+  </div>
+  <div class="check">✅</div>
+  <h1>Agreement Signed</h1>
+  <p>Thank you, ${buyer.firstName}. Your inspection agreement has been signed and recorded.</p>
+  <div class="conf">
+    <strong>Confirmation:</strong> ${confId}<br>
+    <strong>Property:</strong> ${address}<br>
+    <strong>Date:</strong> ${dateFmt} @ ${time}
+  </div>
+  <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>(480) 418-7633</strong>.</p>
+</div>
+</body>
+</html>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Inspection Agreement — San Tan Property Inspections</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;padding:24px;}
+.outer{max-width:700px;margin:0 auto;}
+.logo-bar{background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:16px;text-align:center;}
+.logo-title{font-family:Georgia,serif;font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:2px;}
+.logo-sub{font-family:Georgia,serif;font-size:.65rem;color:#E8C97A;letter-spacing:4px;margin-top:3px;}
+.card{background:#fff;border-radius:16px;padding:36px;box-shadow:0 28px 70px rgba(0,0,0,.4);}
+h1{font-family:Georgia,serif;color:#1B2D52;font-size:1.4rem;margin-bottom:6px;}
+.subtitle{color:#888;font-size:.85rem;margin-bottom:24px;}
+.info-box{background:#FAF7F0;border-radius:8px;padding:14px 16px;margin-bottom:24px;font-size:.85rem;line-height:1.8;}
+.info-box strong{color:#1B2D52;}
+.agreement-box{background:#F8F8F8;border:1px solid #E0E0E0;border-radius:8px;padding:20px;margin-bottom:24px;font-size:.78rem;line-height:1.7;color:#444;max-height:420px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;}
+.section-title{font-weight:700;color:#1B2D52;font-size:.9rem;margin-bottom:4px;}
+label{display:flex;align-items:flex-start;gap:10px;font-size:.85rem;color:#444;margin-bottom:16px;cursor:pointer;}
+label input{margin-top:3px;flex-shrink:0;width:16px;height:16px;}
+.sig-field{width:100%;border:2px solid #E0D9CC;border-radius:8px;padding:12px;font-size:1rem;font-family:Georgia,serif;color:#1B2D52;outline:none;transition:border-color .2s;}
+.sig-field:focus{border-color:#C9A84C;}
+.sig-label{font-size:.82rem;color:#888;margin-bottom:6px;display:block;}
+.btn{width:100%;background:#1B2D52;color:white;border:none;border-radius:10px;padding:16px;font-size:1rem;font-weight:700;cursor:pointer;margin-top:20px;transition:background .2s;}
+.btn:hover{background:#243a6e;}
+.btn:disabled{background:#aaa;cursor:not-allowed;}
+.error{background:#fdecea;border:1px solid #f5c6c3;border-radius:8px;padding:12px 16px;color:#c0392b;font-size:.85rem;margin-bottom:16px;}
+.legal{font-size:.75rem;color:#aaa;text-align:center;margin-top:12px;line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="outer">
+  <div class="logo-bar">
+    <div class="logo-title">SAN TAN PROPERTY</div>
+    <div class="logo-sub">INSPECTIONS</div>
+  </div>
+  <div class="card">
+    <h1>Home Inspection Agreement</h1>
+    <p class="subtitle">Please review and sign before your inspection</p>
+
+    <div class="info-box">
+      <strong>Client:</strong> ${fullName}<br>
+      <strong>Property:</strong> ${address}<br>
+      <strong>Inspection Date:</strong> ${dateFmt} @ ${time}<br>
+      ${addonsDisplay ? '<strong>Add-Ons:</strong> ' + addonsDisplay + '<br>' : ''}
+      <strong>Estimated Total:</strong> $${finalPrice}<br>
+      <strong>Confirmation #:</strong> ${confId}
+    </div>
+
+    <div class="section-title">Agreement</div>
+    <div class="agreement-box">${AGREEMENT_TEXT}</div>
+
+    ${error ? '<div class="error">' + error + '</div>' : ''}
+
+    <form method="POST" action="/agreement/${token}/sign" id="agreementForm">
+      <label>
+        <input type="checkbox" id="readCheck" required/>
+        I have read and understand the full agreement above
+      </label>
+      <label>
+        <input type="checkbox" id="agreeCheck" required/>
+        I agree to be bound by all terms and conditions of this agreement
+      </label>
+
+      <span class="sig-label">Type your full legal name as your electronic signature</span>
+      <input
+        type="text"
+        name="signature"
+        class="sig-field"
+        placeholder="Full legal name"
+        required
+        autocomplete="name"
+      />
+
+      <button type="submit" class="btn" id="submitBtn">Sign Agreement</button>
+      <p class="legal">By signing, you acknowledge that your electronic signature is legally binding to the same extent as a handwritten signature.</p>
+    </form>
+  </div>
+</div>
+<script>
+document.getElementById('agreementForm').addEventListener('submit', function(e) {
+  const sig = document.querySelector('input[name="signature"]').value.trim();
+  const r = document.getElementById('readCheck').checked;
+  const a = document.getElementById('agreeCheck').checked;
+  if (!sig || !r || !a) {
+    e.preventDefault();
+    alert('Please check both boxes and enter your full name before signing.');
+    return;
+  }
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('submitBtn').textContent = 'Saving...';
+});
+</script>
+</body>
+</html>`;
+}
+
+// ── AGREEMENT PDF GENERATION ──────────────────────────────────
+async function generateAgreementPdf(booking, signedAt, signature, ip) {
+  // Use puppeteer (already available in santan-inspector) to generate PDF
+  // We build a simple HTML page and render it
+  const { confId, address, dateFmt, time, fullName, buyer, finalPrice, addonsLine } = booking;
+  const signedDate = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+body{font-family:Arial,sans-serif;font-size:10pt;color:#222;margin:48px;line-height:1.6;}
+h1{font-size:14pt;color:#1B2D52;margin-bottom:4px;}
+h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
+.header{text-align:center;border-bottom:2px solid #C9A84C;padding-bottom:12px;margin-bottom:20px;}
+.header .biz{font-size:16pt;font-weight:700;color:#1B2D52;}
+.header .sub{font-size:9pt;color:#666;margin-top:4px;}
+.info-grid{display:grid;grid-template-columns:120px 1fr;gap:4px 12px;margin-bottom:20px;font-size:9.5pt;}
+.info-grid .lbl{color:#666;}
+.info-grid .val{font-weight:600;}
+.agreement-text{font-size:8.5pt;line-height:1.65;white-space:pre-wrap;background:#f8f8f8;border:1px solid #ddd;padding:14px;border-radius:4px;margin-bottom:20px;}
+.sig-block{border-top:2px solid #1B2D52;padding-top:16px;margin-top:20px;}
+.sig-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:12px;font-size:9pt;}
+.sig-row .lbl{color:#666;font-size:8pt;}
+.sig-row .val{font-size:10pt;font-weight:600;border-bottom:1px solid #333;padding-bottom:4px;margin-top:4px;}
+.record{background:#EAF3FB;border:1px solid #1B2D52;border-radius:4px;padding:10px 14px;font-size:8pt;color:#444;margin-top:16px;}
+.record strong{color:#1B2D52;}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
+  <div class="sub">Licensed Home Inspector — License #79346 &nbsp;|&nbsp; Jaren Drummond<br>
+  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 418-7633 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+</div>
+
+<h1>HOME INSPECTION AGREEMENT</h1>
+
+<div class="info-grid">
+  <span class="lbl">Client</span><span class="val">${fullName}</span>
+  <span class="lbl">Property</span><span class="val">${address}</span>
+  <span class="lbl">Inspection Date</span><span class="val">${dateFmt} @ ${time}</span>
+  <span class="lbl">Add-On Services</span><span class="val">${addonsLine || 'None'}</span>
+  <span class="lbl">Est. Total</span><span class="val">$${finalPrice}</span>
+  <span class="lbl">Confirmation #</span><span class="val">${confId}</span>
+</div>
+
+<div class="agreement-text">${AGREEMENT_TEXT}</div>
+
+<div class="sig-block">
+  <h2>Electronic Signature Record</h2>
+  <div class="sig-row">
+    <div>
+      <div class="lbl">Client Printed Name</div>
+      <div class="val">${fullName}</div>
+    </div>
+    <div>
+      <div class="lbl">Electronic Signature</div>
+      <div class="val">${signature}</div>
+    </div>
+    <div>
+      <div class="lbl">Date Signed</div>
+      <div class="val">${signedDate} (AZ)</div>
+    </div>
+  </div>
+  <div class="record">
+    <strong>Signature Record:</strong> This agreement was electronically signed on ${signedDate} (Arizona Time).
+    IP Address: ${ip} &nbsp;|&nbsp; Agreement Version: ${AGREEMENT_VERSION} &nbsp;|&nbsp; Confirmation: ${confId}<br>
+    The electronic signature above is legally binding pursuant to the terms of Section 9 of this Agreement.
+  </div>
+</div>
+</body>
+</html>`;
+
+  try {
+    const puppeteer = require('puppeteer');
+    const browser = await puppeteer.launch({
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'],
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdf = await page.pdf({ format: 'Letter', printBackground: true, margin: { top:'0.5in', right:'0.5in', bottom:'0.5in', left:'0.5in' } });
+    await browser.close();
+    return pdf;
+  } catch(e) {
+    console.error('Agreement PDF generation failed:', e.message);
+    return null;
+  }
 }
 
 // ── ROUTES ────────────────────────────────────────────────────
@@ -215,7 +547,7 @@ app.get('/api/availability', async function(req, res) {
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
 
   const inspDuration   = parseInt(req.query.duration) || 360;
-  const BUFFER_MINS    = 90; // 1.5 hour buffer between inspections
+  const BUFFER_MINS    = 90;
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
   try {
@@ -260,20 +592,20 @@ app.get('/api/availability', async function(req, res) {
 });
 
 app.post('/api/book', async function(req, res) {
-  // Overall request timeout — never hang forever
   const bookingTimeout = setTimeout(function() {
     if (!res.headersSent) {
       res.status(504).json({ error: 'Request timed out. Please try again or call (480) 418-7633.' });
     }
-  }, 20000); // 20 seconds max
+  }, 20000);
   const originalJson = res.json.bind(res);
   const originalStatus = res.status.bind(res);
   res.json = function(data) { clearTimeout(bookingTimeout); return originalJson(data); };
-  res.status = function(code) { 
+  res.status = function(code) {
     const s = originalStatus(code);
     s.json = function(data) { clearTimeout(bookingTimeout); return originalJson.call(res, data); };
     return s;
   };
+
   const b = req.body;
   const { address, sqft, yearBuilt, inspType, totalPrice, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
   const addons         = b.addons || [];
@@ -366,6 +698,7 @@ app.post('/api/book', async function(req, res) {
   sms(process.env.OWNER_PHONE, ownerSmsBody).catch(function(e){ console.error('Owner SMS:', e.message); });
 });
 
+// ── CONFIRM BOOKING ───────────────────────────────────────────
 app.get('/confirm/:token', async function(req, res) {
   let booking;
   try {
@@ -412,7 +745,7 @@ app.get('/confirm/:token', async function(req, res) {
     calId = r.data.id;
     console.log('Calendar event created: ' + calId);
 
-    // Save to confirmed_bookings for dashboard
+    // Save to confirmed_bookings
     try {
       await pool.query(
         'INSERT INTO confirmed_bookings (conf_id, data) VALUES ($1, $2) ON CONFLICT (conf_id) DO NOTHING',
@@ -421,10 +754,27 @@ app.get('/confirm/:token', async function(req, res) {
     } catch(e) { console.error('DB confirmed save:', e.message); }
   } catch(e) { console.error('Calendar:', e.message); }
 
+  // Generate agreement token for this confirmed booking
+  const agreeToken = uuidv4();
+  const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
+  const agreementUrl = BASE_URL + '/agreement/' + agreeToken;
+
+  // Store agreement token temporarily so we can look up booking from it
+  try {
+    await pool.query(
+      'UPDATE confirmed_bookings SET agreement_sent_at = NOW(), data = data || $1::jsonb WHERE conf_id = $2',
+      [JSON.stringify({ agreementToken: agreeToken }), confId]
+    );
+    // Also store in pending_bookings temporarily for agreement lookup
+    await dbSet('agree_' + agreeToken, { ...booking, calId, confirmedAt: new Date().toISOString(), agreeToken });
+  } catch(e) { console.error('Agreement token store error:', e.message); }
+
+  // SMS - buyer
   await sms(buyer.phone,
-    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nPlease sign your inspection agreement:\n' + agreementUrl + '\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
 
+  // SMS - buyer agent
   await sms(buyerAgent.phone,
     'Hi ' + buyerAgent.name + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
@@ -437,12 +787,9 @@ app.get('/confirm/:token', async function(req, res) {
 
   const tripLineBuyer = tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '';
 
-  const buyerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
-    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
-    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-    + '</div>'
-    + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
+  // Buyer confirmation email — includes agreement link
+  const buyerHtml = emailWrap(
+    '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
     + '<p>Hi ' + buyer.firstName + ', here are your booking details:</p>'
     + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
     + '<tr><td style="padding:6px 0;color:#888;width:130px">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'
@@ -453,10 +800,10 @@ app.get('/confirm/:token', async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
     + '</table>'
     + '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>'
-    + (addons.includes('Termite Inspection (WDO)') ? '<p style="font-size:.83rem;color:#666;margin-top:8px">🐛 <strong>Note on termite inspection:</strong> The WDO/termite inspection is performed under a separate licensed pest control company. You will receive two reports — one from San Tan Property Inspections and a separate WDO report.</p>' : '')
-    + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0">'
-    + '<p style="margin:0 0 4px;font-size:.85rem"><strong style="color:#1B2D52">📋 Inspection Agreement</strong></p>'
-    + '<p style="margin:0;font-size:.82rem;color:#555;line-height:1.6">You will receive a copy of our Inspection Agreement before your appointment. Please review and sign it prior to the inspection. You can also <a href=\"https://santanpropertyinspections.com/SanTan_Inspection_Agreement.docx\" style=\"color:#1B2D52;font-weight:600\">download it here</a> to review in advance.</p>'
+    + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
+    + '<p style="margin:0 0 8px;font-size:.92rem;font-weight:700;color:#1B2D52">ACTION REQUIRED: Sign Your Inspection Agreement</p>'
+    + '<p style="margin:0 0 12px;font-size:.84rem;color:#555;line-height:1.6">Your report will not be released until your agreement is signed. Please take a moment to review and sign before inspection day.</p>'
+    + '<a href="' + agreementUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.88rem">Review &amp; Sign Agreement</a>'
     + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
     + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
@@ -472,21 +819,16 @@ app.get('/confirm/:token', async function(req, res) {
     + '<button type="submit" style="background:#1B2D52;color:white;padding:9px 20px;border:none;border-radius:6px;font-size:.83rem;font-weight:700;cursor:pointer;align-self:flex-start">Request Reschedule</button>'
     + '</form>'
     + '</div>'
-    + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-    + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-    + '</div>';
+  );
 
   try {
     await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
   } catch(e) { console.error('Buyer email:', e.message); }
 
+  // Extra recipients email
   if (extraEmails && extraEmails.length) {
-    const extraHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
-    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
-    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-    + '</div>'
-      + '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
+    const extraHtml = emailWrap(
+      '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
       + '<p>You have been added as a report recipient for the following inspection:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
       + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'
@@ -498,24 +840,18 @@ app.get('/confirm/:token', async function(req, res) {
       + '</table>'
       + '<p>The inspection report will be delivered the <strong>same day</strong> as the inspection.</p>'
       + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
-      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-      + '</div>';
+    );
     for (const email of extraEmails) {
       try {
         await sendEmail(email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', extraHtml);
-        console.log('Extra recipient email sent to ' + email);
       } catch(e) { console.error('Extra recipient email to ' + email + ':', e.message); }
     }
   }
 
+  // Buyer agent email
   if (buyerAgent && buyerAgent.email) {
-    const baHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
-    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
-    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-    + '</div>'
-      + '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'
+    const baHtml = emailWrap(
+      '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'
       + '<p>Hi ' + buyerAgent.name + ',</p>'
       + '<p>The inspection for your buyer has been confirmed. Details below:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -528,21 +864,16 @@ app.get('/confirm/:token', async function(req, res) {
       + '</table>'
       + '<p>Please confirm the seller\'s agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
       + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
-      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-      + '</div>';
+    );
     try {
       await sendEmail(buyerAgent.email, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
     } catch(e) { console.error('Buyer agent email:', e.message); }
   }
 
+  // Seller agent email
   if (sellerAgent && sellerAgent.email) {
-    const sellerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
-    + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:20px;border-radius:6px">'
-    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-    + '</div>'
-      + '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'
+    const sellerHtml = emailWrap(
+      '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'
       + '<p>Hi ' + (sellerAgent.name || 'there') + ',</p>'
       + '<p>A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -551,20 +882,19 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
       + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + '</td></tr>'
       + '</table>'
-      + '<p><strong>Please ensure by inspection day:</strong></p>'
-      + '<ul><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
-      + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>WARNING:</strong> If utilities are NOT on, a $125 re-inspection fee will apply.</p>'
+      + '<ul style="margin:12px 0 12px 20px"><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
+      + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>Note:</strong> If utilities are not on at the time of inspection, a $125 re-inspection fee will apply.</p>'
       + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
-      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-      + '</div>';
+    );
     try {
       await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml);
     } catch(e) { console.error('Seller agent email:', e.message); }
   }
 
+  // Owner confirmation page
   const tripConfirmLine = tripCharge.apply ? '<tr><td style="padding:6px 0;color:#888;width:130px">Trip Charge</td><td style="color:#C9A84C;font-weight:600">+$' + TRIP_CHARGE_AMT + ' (' + tripCharge.miles + ' miles)</td></tr>' : '';
   const discountConfirmLine = discountCode ? '<tr><td style="padding:6px 0;color:#888">Discount</td><td style="color:#1ab464;font-weight:600">' + discountCode + ' (-$' + discountAmount + ')</td></tr>' : '';
+
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -582,7 +912,7 @@ body::before{content:'';position:absolute;inset:0;background:url("data:image/svg
 .check{width:60px;height:60px;background:#e8f7ee;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:1.8rem;}
 h1{font-family:Georgia,serif;font-size:1.5rem;color:#1B2D52;text-align:center;margin-bottom:6px;}
 .sub{text-align:center;color:#8C7B6B;font-size:.88rem;margin-bottom:28px;line-height:1.6;}
-.conf-badge{background:#1B2D52;color:#C9A84C;font-weight:700;font-size:.82rem;letter-spacing:1px;padding:8px 18px;border-radius:20px;display:inline-block;margin:0 auto 24px;display:block;text-align:center;}
+.conf-badge{background:#1B2D52;color:#C9A84C;font-weight:700;font-size:.82rem;letter-spacing:1px;padding:8px 18px;border-radius:20px;display:block;text-align:center;margin-bottom:24px;}
 table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:.88rem;}
 td{padding:8px 0;vertical-align:top;border-bottom:1px solid #F0EBE0;}
 tr:last-child td{border-bottom:none;}
@@ -591,8 +921,9 @@ td:last-child{color:#2C2C2C;font-weight:600;}
 .total-row td{padding-top:14px;font-size:1rem;}
 .total-row td:first-child{font-weight:700;color:#1B2D52;}
 .total-row td:last-child{color:#C9A84C;font-size:1.2rem;}
-.notice{background:#FAF7F0;border-radius:8px;padding:14px 16px;font-size:.82rem;color:#8C7B6B;line-height:1.7;margin-bottom:20px;}
+.notice{background:#FAF7F0;border-radius:8px;padding:14px 16px;font-size:.82rem;color:#8C7B6B;line-height:1.7;margin-bottom:16px;}
 .notice strong{color:#1B2D52;}
+.agree-notice{background:#EAF3FB;border-left:4px solid #1B2D52;border-radius:0 8px 8px 0;padding:12px 16px;font-size:.82rem;color:#555;line-height:1.6;margin-bottom:20px;}
 .footer{text-align:center;font-size:.78rem;color:#B0A898;border-top:1px solid #F0EBE0;padding-top:16px;}
 .footer a{color:#C9A84C;text-decoration:none;}
 </style>
@@ -603,9 +934,9 @@ td:last-child{color:#2C2C2C;font-weight:600;}
     <div class="logo-title">SAN TAN PROPERTY</div>
     <div class="logo-sub">INSPECTIONS</div>
   </div>
-  <div class="check">✅</div>
+  <div class="check">&#10003;</div>
   <h1>Booking Confirmed!</h1>
-  <p class="sub">Confirmation texts have been sent to the buyer and agents.</p>
+  <p class="sub">Confirmation texts and emails have been sent to the buyer and agents.</p>
   <div class="conf-badge">Confirmation # ${confId}</div>
   <table>
     <tr><td>Buyer</td><td>${fullName}</td></tr>
@@ -614,26 +945,173 @@ td:last-child{color:#2C2C2C;font-weight:600;}
     <tr><td>Date</td><td>${dateFmt}</td></tr>
     <tr><td>Time</td><td>${time}${endTime ? ' to ' + endTime : ''}</td></tr>
     ${tripConfirmLine}${discountConfirmLine}
-    <tr class="total-row"><td>Total Charged</td><td>$${finalPrice}</td></tr>
+    <tr class="total-row"><td>Total</td><td>$${finalPrice}</td></tr>
   </table>
+  <div class="agree-notice">
+    <strong>Agreement link sent to buyer.</strong> The report will be locked until the agreement is signed. You can check signature status in the admin dashboard.
+  </div>
   <div class="notice">
-    <strong>📱 Texts sent to:</strong> ${fullName} · ${buyerAgent.name}${sellerAgent && sellerAgent.name ? ' · ' + sellerAgent.name : ''}<br>
-    <strong>📧 Emails sent to:</strong> ${buyer.email}${buyerAgent.email ? ' · ' + buyerAgent.email : ''}
+    <strong>Texts sent to:</strong> ${fullName} &middot; ${buyerAgent.name}${sellerAgent && sellerAgent.name ? ' &middot; ' + sellerAgent.name : ''}<br>
+    <strong>Emails sent to:</strong> ${buyer.email}${buyerAgent.email ? ' &middot; ' + buyerAgent.email : ''}
   </div>
   <div class="footer">
-    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;·&nbsp; (480) 418-7633 &nbsp;·&nbsp; License #79346
+    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 418-7633 &nbsp;&middot;&nbsp; License #79346
   </div>
 </div>
 </body>
 </html>`);
 });
 
+// ── AGREEMENT ROUTES ──────────────────────────────────────────
+
+// Show agreement page
+app.get('/agreement/:token', async function(req, res) {
+  const token = req.params.token;
+  let booking;
+  try {
+    booking = await dbGet('agree_' + token);
+  } catch(e) {
+    console.error('Agreement DB read error:', e.message);
+    return res.status(500).send('<h2>Database error. Please call (480) 418-7633.</h2>');
+  }
+
+  if (!booking) {
+    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Agreement — San Tan Property Inspections</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:60px 24px;background:#0F1C35;color:#fff">
+<h2>This agreement link has expired or already been signed.</h2>
+<p style="margin-top:12px;color:#aaa">If you need to sign your agreement, please contact us at (480) 418-7633.</p>
+</body></html>`);
+  }
+
+  // Check if already signed
+  try {
+    const r = await pool.query('SELECT agreement_signed_at FROM confirmed_bookings WHERE conf_id = $1', [booking.confId]);
+    if (r.rows.length && r.rows[0].agreement_signed_at) {
+      return res.send(buildAgreementPage(booking, token, { signed: true }));
+    }
+  } catch(e) { console.error('Agreement status check:', e.message); }
+
+  res.send(buildAgreementPage(booking, token));
+});
+
+// Process signature
+app.post('/agreement/:token/sign', async function(req, res) {
+  const token = req.params.token;
+  const signature = (req.body.signature || '').trim();
+
+  if (!signature) {
+    let booking;
+    try { booking = await dbGet('agree_' + token); } catch(e) { booking = null; }
+    return res.send(buildAgreementPage(booking || {}, token, { error: 'Please enter your full legal name to sign.' }));
+  }
+
+  let booking;
+  try {
+    booking = await dbGet('agree_' + token);
+  } catch(e) {
+    return res.status(500).send('<h2>Database error. Please call (480) 418-7633.</h2>');
+  }
+
+  if (!booking) {
+    return res.send('<h2>This agreement link has expired. Please contact us at (480) 418-7633.</h2>');
+  }
+
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const signedAt = new Date().toISOString();
+
+  // Store signature in DB
+  try {
+    await pool.query(
+      `UPDATE confirmed_bookings
+       SET agreement_signed_at = $1, agreement_signature = $2, agreement_ip = $3
+       WHERE conf_id = $4`,
+      [signedAt, signature, ip, booking.confId]
+    );
+  } catch(e) {
+    console.error('Signature DB write error:', e.message);
+    return res.status(500).send('<h2>Could not save signature. Please call (480) 418-7633.</h2>');
+  }
+
+  // Generate and store signed PDF in background — dont block the response
+  res.send(buildAgreementPage(booking, token, { signed: true }));
+
+  // Background: generate PDF, upload to R2, send confirmation email
+  setImmediate(async function() {
+    try {
+      const pdf = await generateAgreementPdf(booking, signedAt, signature, ip);
+      if (pdf) {
+        const pdfKey = 'agreements/' + booking.confId + '-agreement.pdf';
+        try {
+          await uploadToR2(pdfKey, pdf, 'application/pdf');
+          await pool.query(
+            'UPDATE confirmed_bookings SET agreement_pdf_key = $1 WHERE conf_id = $2',
+            [pdfKey, booking.confId]
+          );
+          console.log('Agreement PDF saved to R2: ' + pdfKey);
+        } catch(e) { console.error('R2 agreement upload error:', e.message); }
+      }
+    } catch(e) { console.error('Agreement PDF background error:', e.message); }
+
+    // Send owner notification
+    try {
+      const signedDate = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short' });
+      const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
+        + '<h2 style="color:#1B2D52">Agreement Signed</h2>'
+        + '<p><b>' + booking.fullName + '</b> has signed the inspection agreement.</p>'
+        + '<p><b>Conf #:</b> ' + booking.confId + '<br>'
+        + '<b>Property:</b> ' + booking.address + '<br>'
+        + '<b>Inspection:</b> ' + booking.dateFmt + ' @ ' + booking.time + '<br>'
+        + '<b>Signed:</b> ' + signedDate + ' (AZ)<br>'
+        + '<b>Signature:</b> ' + signature + '<br>'
+        + '<b>IP:</b> ' + ip + '</p>'
+        + '</div>';
+      await sendEmail(process.env.OWNER_EMAIL, 'AGREEMENT SIGNED: ' + booking.fullName + ' [' + booking.confId + ']', ownerHtml);
+    } catch(e) { console.error('Owner agreement notification email:', e.message); }
+
+    // Send client confirmation email
+    try {
+      const clientHtml = emailWrap(
+        '<h2 style="color:#0F1C35">Agreement Signed</h2>'
+        + '<p>Hi ' + booking.buyer.firstName + ', this confirms that you have signed the inspection agreement for:</p>'
+        + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+        + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + booking.address + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Inspection Date</td><td style="color:#2C2C2C;font-weight:600">' + booking.dateFmt + ' @ ' + booking.time + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + booking.confId + '</td></tr>'
+        + '</table>'
+        + '<p>Your agreement has been recorded. You are all set for your inspection.</p>'
+        + '<p>Questions? Call or text <strong>(480) 418-7633</strong></p>'
+      );
+      await sendEmail(booking.buyer.email, 'Agreement Signed — ' + booking.confId, clientHtml);
+    } catch(e) { console.error('Client agreement confirmation email:', e.message); }
+  });
+});
+
+// API for inspector app to check agreement status before sending report
+app.get('/api/agreement-status/:confId', async function(req, res) {
+  try {
+    const r = await pool.query(
+      'SELECT agreement_signed_at, agreement_signature, agreement_pdf_key FROM confirmed_bookings WHERE conf_id = $1',
+      [req.params.confId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    const row = r.rows[0];
+    res.json({
+      signed: !!row.agreement_signed_at,
+      signedAt: row.agreement_signed_at || null,
+      signature: row.agreement_signature || null,
+      pdfKey: row.agreement_pdf_key || null,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── CANCEL BOOKING ────────────────────────────────────────────
 app.get('/cancel/:token', async function(req, res) {
   let booking;
   try {
     booking = await dbGet(req.params.token);
   } catch(e) {
-    console.error('DB read error:', e.message);
     return res.send('<h2>Database error. Please try again or call (480) 418-7633.</h2>');
   }
   if (!booking) return res.send('<h2>This link has expired or already been used.</h2>');
@@ -647,6 +1125,7 @@ app.get('/cancel/:token', async function(req, res) {
     + '</div>');
 });
 
+// ── GOOGLE AUTH ────────────────────────────────────────────────
 app.get('/auth/google', function(req, res) {
   res.redirect(oAuth2Client.generateAuthUrl({ access_type:'offline', scope:['https://www.googleapis.com/auth/calendar'], prompt:'consent' }));
 });
@@ -656,6 +1135,7 @@ app.get('/auth/google/callback', async function(req, res) {
   res.send('<pre>Add to Railway as GOOGLE_REFRESH_TOKEN:\n\n' + result.tokens.refresh_token + '</pre>');
 });
 
+// ── SMS REPLY ─────────────────────────────────────────────────
 app.post('/sms/reply', express.urlencoded({ extended: false }), async function(req, res) {
   const from  = req.body.From || 'Unknown';
   const body  = req.body.Body || '';
@@ -664,7 +1144,7 @@ app.post('/sms/reply', express.urlencoded({ extended: false }), async function(r
   res.send('<Response></Response>');
 });
 
-// ── CONTACT FORM ─────────────────────────────────────────────
+// ── CONTACT FORM ──────────────────────────────────────────────
 app.post('/api/contact', async function(req, res) {
   const { name, phone, email, role, message } = req.body;
   if (!name || !email || !message) return res.status(400).json({ error: 'Name, email, and message are required.' });
@@ -690,17 +1170,15 @@ app.post('/api/contact', async function(req, res) {
     await sendEmail(process.env.OWNER_EMAIL, 'CONTACT: ' + name + ' (' + roleLabel + ')', html);
   } catch(e) {
     console.error('Contact form email:', e.message);
-    res.status(500).json({ error: 'Could not send message. Please call or email directly.' });
-    return;
+    return res.status(500).json({ error: 'Could not send message. Please call or email directly.' });
   }
 
-  const contactSms = 'NEW CONTACT FORM\n' + name + ' (' + roleLabel + ')' + (phone ? '\n' + phone : '') + '\n' + email + '\n\n' + message;
-  sms(process.env.OWNER_PHONE, contactSms).catch(function(e){ console.error('Contact SMS:', e.message); });
+  sms(process.env.OWNER_PHONE, 'NEW CONTACT FORM\n' + name + ' (' + roleLabel + ')' + (phone ? '\n' + phone : '') + '\n' + email + '\n\n' + message).catch(function(e){ console.error('Contact SMS:', e.message); });
 
   res.json({ success: true });
 });
 
-// ── RESCHEDULE REQUEST ───────────────────────────────────────
+// ── RESCHEDULE REQUEST ────────────────────────────────────────
 app.post('/api/reschedule', async function(req, res) {
   const { confId, name, phone, email, message } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email required.' });
@@ -719,7 +1197,6 @@ app.post('/api/reschedule', async function(req, res) {
     + (phone ? '<p><b>Phone:</b> ' + phone + '</p>' : '')
     + '<p><b>Email:</b> ' + email + '</p>'
     + (message ? '<p><b>Message:</b> ' + message + '</p>' : '')
-    + '<p style="color:#888;font-size:.85rem">Reply to this email or call/text the client to reschedule.</p>'
     + '</div>';
 
   try {
@@ -732,10 +1209,14 @@ app.post('/api/reschedule', async function(req, res) {
 // ── ADMIN DASHBOARD ───────────────────────────────────────────
 const ADMIN_PASSWORD = 'monroe';
 
-app.get('/admin', function(req, res) {
+function checkAdmin(req) {
   const auth = req.headers['authorization'];
   const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) {
+  return pass === ADMIN_PASSWORD;
+}
+
+app.get('/admin', function(req, res) {
+  if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
   }
@@ -777,6 +1258,8 @@ tr:hover td{background:rgba(201,168,76,.04);}
 .badge{display:inline-block;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.5px;}
 .badge-disc{background:rgba(26,180,100,.15);color:#1ab464;}
 .badge-trip{background:rgba(201,168,76,.15);color:#C9A84C;}
+.badge-signed{background:rgba(26,180,100,.15);color:#1ab464;}
+.badge-unsigned{background:rgba(192,57,43,.15);color:#e8a87c;}
 .resc-msg{font-size:.78rem;color:#8A9AB5;margin-top:3px;font-style:italic;}
 @media(max-width:600px){th:nth-child(4),td:nth-child(4),th:nth-child(5),td:nth-child(5){display:none;}}
 </style>
@@ -789,7 +1272,7 @@ tr:hover td{background:rgba(201,168,76,.04);}
 <div class="wrap">
   <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
   <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
-    <a href="/admin/csv" style="background:#C9A84C;color:#0F1C35;font-weight:700;font-size:.82rem;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block;">⬇ Export CSV</a>
+    <a href="/admin/csv" style="background:#C9A84C;color:#0F1C35;font-weight:700;font-size:.82rem;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block;">Export CSV</a>
   </div>
 
   <div class="card" style="margin-bottom:20px">
@@ -817,32 +1300,29 @@ async function load() {
     const r = await fetch('/admin/data');
     const d = await r.json();
 
-    // Stats
     const totalRev = d.bookings.reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
     const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
     const monthJobs = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).length;
     const monthRev  = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
-
-    // Top agent
     const agentCount = {};
     d.bookings.forEach(function(b){ const n=b.data.buyerAgent&&b.data.buyerAgent.name?b.data.buyerAgent.name:'Unknown'; agentCount[n]=(agentCount[n]||0)+1; });
     const topAgent = Object.entries(agentCount).sort(function(a,b){return b[1]-a[1];})[0];
-
     const paidRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
-    const unpaidCount = d.bookings.filter(function(b){ return !b.paid_at; }).length;
+    const unpaidCount = d.bookings.filter(function(b){ return !b.paid_at && !b.cancelled_at; }).length;
+    const unsignedCount = d.bookings.filter(function(b){ return !b.agreement_signed_at && !b.cancelled_at; }).length;
+
     document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+d.bookings.length+'</div><div class="sub">all time</div></div>' +
       '<div class="stat"><div class="lbl">Total Revenue</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">all time</div></div>' +
-      '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+(d.bookings.filter(function(b){return b.paid_at;}).length)+' jobs paid</div></div>' +
+      '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+d.bookings.filter(function(b){return b.paid_at;}).length+' jobs paid</div></div>' +
       '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' revenue</div></div>' +
       '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
       '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
-      '<div class="stat"><div class="lbl">Pending Reschedules</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
+      '<div class="stat"><div class="lbl">Unsigned Agreements</div><div class="val" style="color:'+(unsignedCount>0?'#e8a87c':'#1ab464')+'">'+unsignedCount+'</div><div class="sub">pending signature</div></div>' +
+      '<div class="stat"><div class="lbl">Reschedule Requests</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
 
-    // Discount codes
     renderCodes(d.codes || []);
 
-    // Bookings table
     document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
     if (!d.bookings.length) {
       document.getElementById('bookingTable').innerHTML = '<div class="empty">No confirmed bookings yet.</div>';
@@ -855,24 +1335,27 @@ async function load() {
         const addons = bd.addons&&bd.addons.length ? bd.addons.join(', ') : '—';
         const isPaid = !!b.paid_at;
         const isCancelled = !!b.cancelled_at;
+        const isSigned = !!b.agreement_signed_at;
+        const signedBadge = isCancelled ? '' : (isSigned
+          ? '<span class="badge badge-signed" title="Signed: '+new Date(b.agreement_signed_at).toLocaleDateString()+'">Signed</span>'
+          : '<span class="badge badge-unsigned">Unsigned</span>');
         const paidBtn = isCancelled
           ? '<span style="color:#C0392B;font-size:.72rem;font-weight:700">CANCELLED</span>'
           : (isPaid
-            ? '<button onclick="markUnpaid(''+bd.confId+'')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
-            : '<button onclick="markPaid(''+bd.confId+'')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
-        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(''+bd.confId+'',''+( bd.fullName||'' ).replace(/'/g,'')+'')" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
+            ? '<button onclick="markUnpaid(\''+bd.confId+'\')" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
+            : '<button onclick="markPaid(\''+bd.confId+'\')" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
+        const cancelBtn = isCancelled ? '' : '<button onclick="cancelBooking(\''+bd.confId+'\',\''+(bd.fullName||'').replace(/\'/g,'')+'\' )" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
           '<td><div class="agent">'+(bd.buyerAgent?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div>'+paidBtn+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+'</div><div>'+paidBtn+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
-      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Paid</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
     }
 
-    // Reschedule table
     document.getElementById('rescheduleCount').textContent = d.reschedules.length + ' total';
     if (!d.reschedules.length) {
       document.getElementById('rescheduleTable').innerHTML = '<div class="empty">No reschedule requests.</div>';
@@ -890,9 +1373,7 @@ async function load() {
     }
 
     document.getElementById('lastRefresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
-  } catch(e) {
-    console.error(e);
-  }
+  } catch(e) { console.error(e); }
 }
 
 async function cancelBooking(confId, name) {
@@ -919,7 +1400,7 @@ function renderCodes(codes) {
   el.innerHTML = '<table><thead><tr><th>Code</th><th>Discount</th><th>Action</th></tr></thead><tbody>' +
     codes.map(function(c) {
       return '<tr><td><span class="conf">'+c.code+'</span></td><td class="price">'+c.pct+'% off</td>' +
-        '<td><button onclick="deleteCode(''+c.code+'')" style="background:#C0392B;color:white;border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font-size:.75rem">Remove</button></td></tr>';
+        '<td><button onclick="deleteCode(\''+c.code+'\')" style="background:#C0392B;color:white;border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font-size:.75rem">Remove</button></td></tr>';
     }).join('') + '</tbody></table>';
 }
 
@@ -946,10 +1427,9 @@ setInterval(load, 60000);
 </html>`);
 });
 
+// ── ADMIN API ROUTES ──────────────────────────────────────────
 app.post('/admin/cancel-booking', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
 
@@ -962,26 +1442,18 @@ app.post('/admin/cancel-booking', async function(req, res) {
 
   const d = booking.data;
 
-  // Delete Google Calendar event
   if (d.calId) {
     try {
       await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: d.calId, sendUpdates: 'none' });
-      console.log('Calendar event deleted: ' + d.calId);
     } catch(e) { console.warn('Calendar delete failed:', e.message); }
   }
 
-  // Mark as cancelled in DB
   try {
     await pool.query('UPDATE confirmed_bookings SET cancelled_at = NOW() WHERE conf_id = $1', [confId]);
   } catch(e) { console.error('DB cancel update:', e.message); }
 
-  // Email buyer
-  const buyerHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C0392B;padding-top:20px">'
-    + '<div style="text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:20px">'
-    + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-    + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-    + '</div>'
-    + '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
+  const buyerHtml = emailWrap(
+    '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
     + '<p>Hi ' + (d.buyer && d.buyer.firstName ? d.buyer.firstName : 'there') + ',</p>'
     + '<p>Your inspection has been cancelled. We apologize for any inconvenience.</p>'
     + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -991,25 +1463,16 @@ app.post('/admin/cancel-booking', async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + (d.time||'') + '</td></tr>'
     + '</table>'
     + '<p>If you would like to reschedule, please contact us:</p>'
-    + '<p>📞 <strong>(480) 418-7633</strong><br>✉️ <strong>santanpropertyinspections@gmail.com</strong></p>'
-    + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-    + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-    + '</div>';
+    + '<p>&#128222; <strong>(480) 418-7633</strong><br>&#9993; <strong>santanpropertyinspections@gmail.com</strong></p>'
+  );
 
   try {
-    if (d.buyer && d.buyer.email) {
-      await sendEmail(d.buyer.email, 'Inspection Cancelled — ' + confId, buyerHtml);
-    }
+    if (d.buyer && d.buyer.email) await sendEmail(d.buyer.email, 'Inspection Cancelled — ' + confId, buyerHtml);
   } catch(e) { console.error('Cancel buyer email:', e.message); }
 
-  // Email buyer's agent
   if (d.buyerAgent && d.buyerAgent.email) {
-    const agentHtml = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C0392B;padding-top:20px">'
-      + '<div style="text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:20px">'
-      + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
-      + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
-      + '</div>'
-      + '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
+    const agentHtml = emailWrap(
+      '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
       + '<p>Hi ' + d.buyerAgent.name + ',</p>'
       + '<p>The inspection for your buyer has been cancelled.</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
@@ -1019,21 +1482,15 @@ app.post('/admin/cancel-booking', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
       + '</table>'
       + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
-      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections · East Valley, AZ · santanpropertyinspections.com</p>'
-      + '</div>';
-    try {
-      await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml);
-    } catch(e) { console.error('Cancel agent email:', e.message); }
+    );
+    try { await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml); } catch(e) {}
   }
 
   res.json({ success: true });
 });
 
 app.post('/admin/mark-paid', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
   try {
@@ -1043,9 +1500,7 @@ app.post('/admin/mark-paid', async function(req, res) {
 });
 
 app.post('/admin/mark-unpaid', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   try {
     await pool.query('UPDATE confirmed_bookings SET paid_at = NULL WHERE conf_id = $1', [confId]);
@@ -1054,18 +1509,15 @@ app.post('/admin/mark-unpaid', async function(req, res) {
 });
 
 app.get('/admin/csv', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) {
+  if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
   }
   try {
     const result = await pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC');
-    const rows = result.rows;
-    const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Seller Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid'];
+    const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Seller Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid','Agreement Signed','Date Signed'];
     const lines = [headers.join(',')];
-    for (const row of rows) {
+    for (const row of result.rows) {
       const d = row.data;
       const escape = (v) => '"' + String(v||'').replace(/"/g,'""') + '"';
       lines.push([
@@ -1092,33 +1544,20 @@ app.get('/admin/csv', async function(req, res) {
         escape(d.notes||''),
         escape(row.paid_at ? 'Yes' : 'No'),
         escape(row.paid_at ? new Date(row.paid_at).toLocaleDateString('en-US') : ''),
+        escape(row.agreement_signed_at ? 'Yes' : 'No'),
+        escape(row.agreement_signed_at ? new Date(row.agreement_signed_at).toLocaleDateString('en-US') : ''),
       ].join(','));
     }
     res.set('Content-Type', 'text/csv');
     res.set('Content-Disposition', 'attachment; filename="santan_bookings_' + new Date().toISOString().slice(0,10) + '.csv"');
     res.send(lines.join('\n'));
   } catch(e) {
-    console.error('CSV export:', e.message);
     res.status(500).send('Error generating CSV');
   }
 });
 
-// ── DISCOUNT CODE MANAGER ─────────────────────────────────────
-// Codes stored in DB so they can be managed from dashboard
-async function getDiscountCodes() {
-  try {
-    const r = await pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC');
-    return r.rows;
-  } catch(e) {
-    // Table may not exist yet — return defaults
-    return [];
-  }
-}
-
 app.post('/admin/codes/add', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { code, pct } = req.body;
   if (!code || !pct || isNaN(pct) || pct < 1 || pct > 100) return res.status(400).json({ error: 'Invalid code or percentage' });
   try {
@@ -1128,9 +1567,7 @@ app.post('/admin/codes/add', async function(req, res) {
 });
 
 app.post('/admin/codes/delete', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { code } = req.body;
   try {
     await pool.query('DELETE FROM discount_codes WHERE code = $1', [code]);
@@ -1149,21 +1586,18 @@ app.get('/api/validate-code', async function(req, res) {
 });
 
 app.get('/admin/data', async function(req, res) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass !== ADMIN_PASSWORD) {
+  if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
     const [bookings, reschedules, codes] = await Promise.all([
-      pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC'),
+      pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
     ]);
     res.json({ bookings: bookings.rows, reschedules: reschedules.rows, codes: codes.rows });
   } catch(e) {
-    console.error('Admin data:', e.message);
     res.status(500).json({ error: 'DB error' });
   }
 });
