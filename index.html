@@ -717,6 +717,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
             • <strong>Seller's Agent</strong> (if provided) — notification of scheduled inspection, utility/access requirements, and notice that <strong>failure to have utilities on will result in a $125 re-inspection fee</strong><br><br>
             📞 Questions or need to reschedule? Contact <strong>San Tan Property Inspections</strong> at <strong>(480) 418-7633</strong> or <strong>santanpropertyinspections@gmail.com</strong>
           </div>
+          <div style="background:rgba(201,168,76,.06);border:1.5px solid rgba(201,168,76,.3);border-radius:8px;padding:14px;margin-bottom:16px;"><label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;"><input type="checkbox" id="smsConsent" style="width:16px;height:16px;accent-color:var(--gold);flex-shrink:0;margin-top:3px;"><span style="font-size:.8rem;color:var(--text);line-height:1.6;">I agree to receive SMS appointment confirmations and inspection-related notifications from San Tan Property Inspections. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe. View our <a href="#privacy-policy" style="color:var(--gold);">Privacy Policy</a>.</span></label></div>
           <div style="font-size:.8rem;color:var(--warm-gray);margin-bottom:18px">💳 <strong style="color:var(--navy-dark)">Payment</strong> collected day-of inspection. We accept Square, Venmo, Zelle, and cash.</div>
           <p style="text-align:right;font-size:.78rem;color:var(--gold);font-weight:600;margin-top:16px;margin-bottom:-8px;">🎉 Last step — you're almost done!</p>
           <div class="wnav">
@@ -1005,6 +1006,8 @@ function validateContacts(){
     const val=inp.value.trim();
     if(val&&!validEmail(val)){inp.classList.add('err');showToast("One of the extra email addresses doesn't look right.",true);ok=false;break;}
   }
+  const smsCheck=document.getElementById('smsConsent');
+if(smsCheck&&!smsCheck.checked){showToast('Please agree to receive SMS notifications to continue.',true);return false;}
   return ok;
 }
 
@@ -1216,8 +1219,9 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
   <h2>How We Use Your Information</h2>
   <p>We use your information solely to confirm and manage your inspection appointment. We may send SMS notifications including booking confirmations, scheduling reminders, and inspection requirement notices.</p>
   <h2>SMS Messaging</h2>
-  <p>By providing your phone number, you consent to receive SMS messages from San Tan Property Inspections regarding your appointment. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help.</p>
-  <h2>We Do Not Share Your Information</h2>
+  <p>By checking the SMS consent box on our booking form at santanpropertyinspections.com, you consent to receive SMS messages from San Tan Property Inspections regarding your inspection appointment, including booking confirmations, scheduling reminders, and inspection requirement notices. Message frequency varies based on appointment activity. Message and data rates may apply. Reply STOP to unsubscribe at any time. Reply HELP for assistance.</p>
+<p><strong>Mobile numbers are not shared with third parties or affiliates for marketing or promotional purposes.</strong></p>
+<h2>We Do Not Share Your Information</h2>
   <p>We do not sell, trade, or share your personal information with third parties for marketing purposes.</p>
   <h2>Contact Us</h2>
   <p>Questions? Call (480) 418-7633 or email santanpropertyinspections@gmail.com</p>
