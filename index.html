@@ -1122,12 +1122,12 @@ async function submitBooking(){
       <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${data.confirmationId}</div></div>`;
     document.getElementById('succMod').classList.add('active');
   }catch(e){showToast(e.message||'Booking unavailable — please call or text (480) 418-7633 to schedule.',true);}
-  finally{
+finally{
     btn.classList.remove('loading');
-    if(!document.getElementById('succMod').classList.contains('active')){
-      btn.disabled=false;bookingSubmitted=false;
-      if(btnText)btnText.textContent='Confirm Booking';
-    }
+    btn.disabled=false;
+    bookingSubmitted=false;
+    if(btnText)btnText.textContent='Confirm Booking';
+  }
   }
 }
 function closeModal(){document.getElementById('succMod').classList.remove('active');}
