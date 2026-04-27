@@ -1,3 +1,5 @@
+website - index
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -640,7 +642,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
         <!-- STEP 5 -->
         <div class="wpanel" id="wp5">
           <div class="wsec-title">Contact Information</div>
-          <div class="wsec-sub">We'll text all parties the moment you confirm. Buyer's agent receives a utility &amp; access checklist.</div>
+          <div class="wsec-sub">We'll text all parties the moment you confirm. If a buyer's agent is provided, they'll receive a utility &amp; access checklist.</div>
 
           <div class="csec">
             <div class="csec-hd"><span class="badge badge-gold">Buyer</span><h4>Buyer / Client</h4></div>
@@ -661,13 +663,13 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           </div>
 
           <div class="csec">
-            <div class="csec-hd"><span class="badge badge-navy">Buyer's Agent</span><h4>Buyer's Agent</h4></div>
+            <div class="csec-hd"><span class="badge badge-navy">Buyer's Agent</span><h4>Buyer's Agent <span style="font-size:.78rem;font-weight:400;color:var(--warm-gray)">(optional)</span></h4></div>
             <div class="fr2">
-              <div class="fg"><label>Agent Name *</label><input type="text" id="baName" placeholder="John Realtor"/></div>
+              <div class="fg"><label>Agent Name</label><input type="text" id="baName" placeholder="John Realtor"/></div>
               <div class="fg"><label>Brokerage</label><input type="text" id="baBrok" placeholder="Realty One Group"/></div>
             </div>
             <div class="fr2">
-              <div class="fg"><label>Cell Phone * <small style="font-weight:400;text-transform:none;letter-spacing:0">(texts sent here)</small></label><input type="tel" id="baPhone" placeholder="(480) 555-0200"/></div>
+              <div class="fg"><label>Cell Phone <small style="font-weight:400;text-transform:none;letter-spacing:0">(texts sent here if provided)</small></label><input type="tel" id="baPhone" placeholder="(480) 555-0200"/></div>
               <div class="fg"><label>Email</label><input type="email" id="baEmail" placeholder="agent@realty.com"/></div>
             </div>
           </div>
@@ -701,7 +703,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);border-radius:8px;padding:14px;margin-bottom:16px;font-size:.83rem;color:var(--warm-gray);line-height:1.75">
             <strong style="color:var(--navy-dark)">📱 Text messages will be sent to:</strong><br>
             • <strong>Buyer</strong> — appointment confirmation with date, time &amp; property address<br>
-            • <strong>Buyer's Agent</strong> — confirmation + reminder to confirm seller's agent is aware of the inspection date, and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong><br>
+            • <strong>Buyer's Agent</strong> (if provided) — confirmation + reminder to confirm seller's agent is aware of the inspection date, and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong><br>
             • <strong>Seller's Agent</strong> (if provided) — notification of scheduled inspection, utility/access requirements, and notice that <strong>failure to have utilities on will result in a $125 re-inspection fee</strong><br><br>
             📞 Questions or need to reschedule? Contact <strong>San Tan Property Inspections</strong> at <strong>(480) 418-7633</strong> or <strong>santanpropertyinspections@gmail.com</strong>
           </div>
@@ -995,10 +997,10 @@ function validateContacts(){
   const fields=[
     {id:'bPhone',  label:"Buyer's phone",       fn:validPhone},
     {id:'bEmail',  label:"Buyer's email",        fn:validEmail},
-    {id:'baPhone', label:"Buyer's agent phone",  fn:validPhone},
   ];
   // Optional fields — only validate format if filled in
   const optional=[
+    {id:'baPhone', label:"Buyer's agent phone",  fn:validPhone},
     {id:'baEmail', label:"Buyer's agent email",  fn:validEmail},
     {id:'saPhone', label:"Seller's agent phone", fn:validPhone},
     {id:'saEmail', label:"Seller's agent email", fn:validEmail},
@@ -1039,6 +1041,7 @@ function buildSum(){
   const ds=d?DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear():'—';
   const addonNames=b.addons.map(a=>a.name);if(b.heatSurcharge)addonNames.push('☀️ Afternoon Surcharge (+$50)');const addonsStr=addonNames.length?addonNames.join(', '):'None';
   const saLine=b.sa&&b.sa.name?`<div class="sr"><div class="sk">Seller's Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
+  const baLine=b.ba&&b.ba.name?`<div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${b.ba.name}${b.ba.phone?' · '+b.ba.phone:''}</div></div>`:'';
   let yearNote='';
   if(b.yr<=1959)yearNote=' <small style="color:var(--gold)">(+$80 age surcharge)</small>';
   else if(b.yr>=1960&&b.yr<=1980)yearNote=' <small style="color:var(--gold)">(+$50 age surcharge)</small>';
@@ -1058,8 +1061,7 @@ function buildSum(){
     <div class="sr"><div class="sk">Duration</div><div class="sv">${m2h(b.totalM||b.baseM)}</div></div>
     <div style="height:1px;background:var(--border);margin:8px 0"></div>
     <div class="sr"><div class="sk">Buyer</div><div class="sv">${b.buyer.firstName||''} ${b.buyer.lastName||''} · ${b.buyer.phone||''}</div></div>
-    <div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${b.ba&&b.ba.name?b.ba.name:''}${b.ba&&b.ba.phone?' · '+b.ba.phone:''}</div></div>
-    ${saLine}${extraLine}${discountLine}
+    ${baLine}${saLine}${extraLine}${discountLine}
     <div class="sum-total"><div class="sk">Estimated Total</div><div class="sv">${finalTotal}</div></div>${b.potentialTripCharge?'<div style="font-size:.75rem;color:var(--warm-gray);margin-top:4px;text-align:right">*Trip charge confirmed by Jaren after booking review</div>':''}`;
 }
 
@@ -1106,7 +1108,7 @@ async function submitBooking(){
   const btnText=document.getElementById('confBtnText');
   btn.classList.add('loading');btn.disabled=true;
   if(btnText)btnText.textContent='Submitting…';
-  const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"],['baName',"Buyer's agent name"],['baPhone',"Buyer's agent phone"]];
+  const req=[['bFirst',"Buyer's first name"],['bLast',"Buyer's last name"],['bPhone',"Buyer's phone"],['bEmail',"Buyer's email"]];
   for(const[id,lbl]of req){const el=document.getElementById(id);if(!el||!el.value.trim()){showToast('Please enter '+lbl+'.',true);btn.classList.remove('loading');btn.disabled=false;bookingSubmitted=false;if(btnText)btnText.textContent='Confirm Booking';return;}}
   // Collect first so validateContacts can reference values
   BD.buyer={firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),phone:document.getElementById('bPhone').value.trim(),email:document.getElementById('bEmail').value.trim()};
