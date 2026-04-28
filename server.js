@@ -547,7 +547,7 @@ app.get('/api/availability', async function(req, res) {
     return res.status(400).json({ error: 'Use YYYY-MM-DD' });
 
   const inspDuration   = parseInt(req.query.duration) || 360;
-  const BUFFER_MINS    = 90;
+  const BUFFER_MINS    = 120;
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
   try {
@@ -569,17 +569,21 @@ app.get('/api/availability', async function(req, res) {
       const slot    = ALL_SLOTS[s];
       const slotMins = slotToMins(slot);
       const slotH   = Math.floor(slotMins/60), slotM = slotMins%60;
-      const slotStart     = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
-      const slotWindowEnd = new Date(slotStart.getTime() + totalBlockMins * 60000);
+      const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
+      const slotEnd   = new Date(slotStart.getTime() + inspDuration * 60000);
 
       for (let i = 0; i < allItems.length; i++) {
         const ev = allItems[i];
         if (!ev.start || !ev.start.dateTime) continue;
         const evStart = new Date(ev.start.dateTime);
         const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
-        const eventStartsInWindow = evStart >= slotStart && evStart < slotWindowEnd;
-        const eventOverlapsSlot   = evStart <= slotStart && evEnd > slotStart;
-        if ((eventStartsInWindow || eventOverlapsSlot) && !booked.includes(slot)) {
+        // Block slot if it conflicts with the event itself OR starts within BUFFER_MINS after the event ends.
+        // No buffer is applied BEFORE the event — slot is fine if it ends at or before the event starts.
+        const evBlockEnd = new Date(evEnd.getTime() + BUFFER_MINS*60000);
+        // Slot is blocked if [slotStart, slotEnd] overlaps the event itself, OR slotStart falls within the buffer window
+        const overlapsEvent = slotStart < evEnd && slotEnd > evStart;
+        const inBufferWindow = slotStart >= evEnd && slotStart <= evBlockEnd;
+        if ((overlapsEvent || inBufferWindow) && !booked.includes(slot)) {
           booked.push(slot); break;
         }
       }
@@ -623,9 +627,16 @@ app.post('/api/book', async function(req, res) {
   if(!buyer||!buyer.firstName) miss.push('buyer.firstName');
   if(!buyer||!buyer.phone) miss.push('buyer.phone');
   if(!buyer||!buyer.email) miss.push('buyer.email');
-  if(!buyerAgent||!buyerAgent.name) miss.push('buyerAgent.name');
-  if(!buyerAgent||!buyerAgent.phone) miss.push('buyerAgent.phone');
+  // Buyer's agent is OPTIONAL — no validation
   if(miss.length) return res.status(400).json({ error:'Missing: '+miss.join(', ') });
+
+  // Normalize buyerAgent to safe object so downstream code can read .name/.phone/.email/.brokerage without crashing
+  const ba = (buyerAgent && typeof buyerAgent === 'object') ? buyerAgent : {};
+  const baName  = ba.name  || '';
+  const baPhone = ba.phone || '';
+  const baEmail = ba.email || '';
+  const baBrok  = ba.brokerage || '';
+  const hasBA   = !!(baName || baPhone || baEmail);
 
   const confId   = 'STH-' + uuidv4().slice(0,8).toUpperCase();
   const fullName = buyer.firstName + ' ' + buyer.lastName;
@@ -678,7 +689,7 @@ app.post('/api/book', async function(req, res) {
     + '<p><b>Est. Total:</b> $' + finalPrice + (trip.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '') + '</p>'
     + '<hr/>'
     + '<p><b>Buyer:</b> ' + fullName + '<br>Phone: ' + buyer.phone + '<br>Email: ' + buyer.email + '</p>'
-    + '<p><b>Buyer Agent:</b> ' + buyerAgent.name + (buyerAgent.brokerage ? ' — ' + buyerAgent.brokerage : '') + '<br>Phone: ' + buyerAgent.phone + '</p>'
+    + (hasBA ? '<p><b>Buyer Agent:</b> ' + baName + (baBrok ? ' — ' + baBrok : '') + (baPhone ? '<br>Phone: ' + baPhone : '') + (baEmail ? '<br>Email: ' + baEmail : '') + '</p>' : '<p><b>Buyer Agent:</b> <i>None provided</i></p>')
     + sellerLineOwner + notesLineOwner + extraEmailsLineOwner + discountLineOwner + tripLineOwner
     + '<div style="margin:28px 0">'
     + '<a href="' + confirmUrl + '" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CONFIRM AND SEND TEXTS</a>'
@@ -726,7 +737,7 @@ app.get('/confirm/:token', async function(req, res) {
       'Address: ' + address, 'Sq Ft: ' + sqft + ' | Year: ' + yearBuilt,
       'Total: $' + finalPrice + (tripCharge.apply ? ' (incl. trip charge)' : ''), '',
       'BUYER: ' + fullName + ' | ' + buyer.phone + ' | ' + buyer.email,
-      'BUYERS AGENT: ' + buyerAgent.name + (buyerAgent.brokerage ? ' — ' + buyerAgent.brokerage : '') + ' | ' + buyerAgent.phone,
+      hasBA ? 'BUYERS AGENT: ' + baName + (baBrok ? ' — ' + baBrok : '') + (baPhone ? ' | ' + baPhone : '') : 'BUYERS AGENT: None provided',
       sellerAgent && sellerAgent.name ? 'SELLERS AGENT: ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + ' | ' + (sellerAgent.phone||'—') : null,
       notes ? 'Notes: ' + notes : null,
       extraEmails && extraEmails.length ? 'Extra report recipients: ' + extraEmails.join(', ') : null,
@@ -774,10 +785,12 @@ app.get('/confirm/:token', async function(req, res) {
     'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nPlease sign your inspection agreement:\n' + agreementUrl + '\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
 
-  // SMS - buyer agent
-  await sms(buyerAgent.phone,
-    'Hi ' + buyerAgent.name + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
-  );
+  // SMS - buyer agent (only if phone provided)
+  if (baPhone) {
+    await sms(baPhone,
+      'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+    );
+  }
 
   if (sellerAgent && sellerAgent.phone) {
     await sms(sellerAgent.phone,
@@ -849,10 +862,10 @@ app.get('/confirm/:token', async function(req, res) {
   }
 
   // Buyer agent email
-  if (buyerAgent && buyerAgent.email) {
+  if (baEmail) {
     const baHtml = emailWrap(
       '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'
-      + '<p>Hi ' + buyerAgent.name + ',</p>'
+      + '<p>Hi ' + (baName || 'there') + ',</p>'
       + '<p>The inspection for your buyer has been confirmed. Details below:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
       + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'
@@ -866,7 +879,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
     );
     try {
-      await sendEmail(buyerAgent.email, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
+      await sendEmail(baEmail, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
     } catch(e) { console.error('Buyer agent email:', e.message); }
   }
 
@@ -951,8 +964,8 @@ td:last-child{color:#2C2C2C;font-weight:600;}
     <strong>Agreement link sent to buyer.</strong> The report will be locked until the agreement is signed. You can check signature status in the admin dashboard.
   </div>
   <div class="notice">
-    <strong>Texts sent to:</strong> ${fullName} &middot; ${buyerAgent.name}${sellerAgent && sellerAgent.name ? ' &middot; ' + sellerAgent.name : ''}<br>
-    <strong>Emails sent to:</strong> ${buyer.email}${buyerAgent.email ? ' &middot; ' + buyerAgent.email : ''}
+    <strong>Texts sent to:</strong> ${fullName}${baPhone ? ' &middot; ' + baName : ''}${sellerAgent && sellerAgent.name ? ' &middot; ' + sellerAgent.name : ''}<br>
+    <strong>Emails sent to:</strong> ${buyer.email}${baEmail ? ' &middot; ' + baEmail : ''}
   </div>
   <div class="footer">
     <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 418-7633 &nbsp;&middot;&nbsp; License #79346
@@ -1355,7 +1368,7 @@ async function load() {
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
-          '<td><div class="agent">'+(bd.buyerAgent?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
+          '<td><div class="agent">'+(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
           '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+'</div><div>'+paidBtn+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
