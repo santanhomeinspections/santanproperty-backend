@@ -7,7 +7,6 @@ require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const { google } = require('googleapis');
-const twilio     = require('twilio');
 const { v4: uuidv4 } = require('uuid');
 const { Pool }   = require('pg');
 
@@ -129,12 +128,12 @@ function slotToMins(slot) {
   return h * 60 + m;
 }
 
-// ── TWILIO ────────────────────────────────────────────────────
-const tw      = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-const TW_FROM = process.env.TWILIO_PHONE_NUMBER;
+// ── QUO SMS ──────────────────────────────────────────────────
+const QUO_API_KEY = process.env.QUO_API_KEY;
+const QUO_FROM    = process.env.QUO_PHONE_NUMBER;  // E.164, e.g. +14806180805
 
 function fmtPhone(raw) {
-  const d = raw.replace(/\D/g,'');
+  const d = String(raw||'').replace(/\D/g,'');
   if (d.length === 10)               return '+1' + d;
   if (d.length === 11 && d[0]==='1') return '+' + d;
   return null;
@@ -143,8 +142,32 @@ function fmtPhone(raw) {
 async function sms(to, body) {
   const num = fmtPhone(to);
   if (!num) { console.warn('Bad phone, skipping SMS:', to); return; }
+  if (!QUO_API_KEY || !QUO_FROM) {
+    console.warn('Quo not configured (QUO_API_KEY or QUO_PHONE_NUMBER missing), skipping SMS to ' + num);
+    return;
+  }
+  if (num === QUO_FROM) {
+    console.warn('Refusing to send SMS to self (from === to ===', num + ')');
+    return;
+  }
   try {
-    await tw.messages.create({ from: TW_FROM, to: num, body });
+    const res = await fetch('https://api.openphone.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Authorization': QUO_API_KEY,
+        'Content-Type':  'application/json'
+      },
+      body: JSON.stringify({
+        from:    QUO_FROM,
+        to:      [num],
+        content: body
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(function(){ return ''; });
+      console.error('SMS error to ' + num + ': HTTP ' + res.status + ' ' + errText.slice(0, 200));
+      return;
+    }
     console.log('SMS sent to ' + num);
   } catch (e) {
     console.error('SMS error to ' + num + ': ' + e.message);
@@ -252,10 +275,10 @@ async function uploadToR2(key, buffer, contentType) {
 // Versioned agreement text — stored with each signed record
 const AGREEMENT_VERSION = '2025-v1';
 const AGREEMENT_TEXT = `SAN TAN PROPERTY INSPECTIONS
-Licensed Home Inspector — License #79346
+Certified Home Inspector — BTR #79346
 Jaren Drummond
 823 W Leadwood Ave, San Tan Valley, AZ 85140
-(480) 418-7633 | santanpropertyinspections@gmail.com | santanpropertyinspections.com
+(480) 618-0805 | santanpropertyinspections@gmail.com | santanpropertyinspections.com
 
 HOME INSPECTION AGREEMENT
 
@@ -341,7 +364,7 @@ p{color:#666;line-height:1.6;margin-bottom:12px;font-size:.9rem;}
     <strong>Property:</strong> ${address}<br>
     <strong>Date:</strong> ${dateFmt} @ ${time}
   </div>
-  <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>(480) 418-7633</strong>.</p>
+  <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>(480) 618-0805</strong>.</p>
 </div>
 </body>
 </html>`;
@@ -479,8 +502,8 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
 <body>
 <div class="header">
   <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
-  <div class="sub">Licensed Home Inspector — License #79346 &nbsp;|&nbsp; Jaren Drummond<br>
-  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 418-7633 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+  <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
+  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
 </div>
 
 <h1>HOME INSPECTION AGREEMENT</h1>
@@ -598,7 +621,7 @@ app.get('/api/availability', async function(req, res) {
 app.post('/api/book', async function(req, res) {
   const bookingTimeout = setTimeout(function() {
     if (!res.headersSent) {
-      res.status(504).json({ error: 'Request timed out. Please try again or call (480) 418-7633.' });
+      res.status(504).json({ error: 'Request timed out. Please try again or call (480) 618-0805.' });
     }
   }, 20000);
   const originalJson = res.json.bind(res);
@@ -716,7 +739,7 @@ app.get('/confirm/:token', async function(req, res) {
     booking = await dbGet(req.params.token);
   } catch(e) {
     console.error('DB read error:', e.message);
-    return res.send('<h2>Database error. Please try again or call (480) 418-7633.</h2>');
+    return res.send('<h2>Database error. Please try again or call (480) 618-0805.</h2>');
   }
   if (!booking) return res.send('<h2>This confirmation link has expired or already been used.</h2>');
 
@@ -782,19 +805,19 @@ app.get('/confirm/:token', async function(req, res) {
 
   // SMS - buyer
   await sms(buyer.phone,
-    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nPlease sign your inspection agreement:\n' + agreementUrl + '\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nPlease sign your inspection agreement:\n' + agreementUrl + '\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
 
   // SMS - buyer agent (only if phone provided)
   if (baPhone) {
     await sms(baPhone,
-      'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
   }
 
   if (sellerAgent && sellerAgent.phone) {
     await sms(sellerAgent.phone,
-      'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? (480) 418-7633 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
   }
 
@@ -819,7 +842,7 @@ app.get('/confirm/:token', async function(req, res) {
     + '<a href="' + agreementUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.88rem">Review &amp; Sign Agreement</a>'
     + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
-    + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+    + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
     + '<div style="background:#FAF7F0;border-radius:8px;padding:16px;margin-top:8px">'
     + '<p style="font-size:.82rem;color:#8C7B6B;margin-bottom:10px"><strong style="color:#1B2D52">Need to reschedule?</strong> Fill out the form below and Jaren will reach out to find a new time.</p>'
@@ -852,7 +875,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
       + '</table>'
       + '<p>The inspection report will be delivered the <strong>same day</strong> as the inspection.</p>'
-      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     );
     for (const email of extraEmails) {
       try {
@@ -876,7 +899,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
       + '</table>'
       + '<p>Please confirm the seller\'s agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
-      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     );
     try {
       await sendEmail(baEmail, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
@@ -897,7 +920,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '</table>'
       + '<ul style="margin:12px 0 12px 20px"><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
       + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>Note:</strong> If utilities are not on at the time of inspection, a $125 re-inspection fee will apply.</p>'
-      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     );
     try {
       await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml);
@@ -968,7 +991,7 @@ td:last-child{color:#2C2C2C;font-weight:600;}
     <strong>Emails sent to:</strong> ${buyer.email}${baEmail ? ' &middot; ' + baEmail : ''}
   </div>
   <div class="footer">
-    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 418-7633 &nbsp;&middot;&nbsp; License #79346
+    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 618-0805 &nbsp;&middot;&nbsp; BTR #79346
   </div>
 </div>
 </body>
@@ -985,14 +1008,14 @@ app.get('/agreement/:token', async function(req, res) {
     booking = await dbGet('agree_' + token);
   } catch(e) {
     console.error('Agreement DB read error:', e.message);
-    return res.status(500).send('<h2>Database error. Please call (480) 418-7633.</h2>');
+    return res.status(500).send('<h2>Database error. Please call (480) 618-0805.</h2>');
   }
 
   if (!booking) {
     return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Agreement — San Tan Property Inspections</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:60px 24px;background:#0F1C35;color:#fff">
 <h2>This agreement link has expired or already been signed.</h2>
-<p style="margin-top:12px;color:#aaa">If you need to sign your agreement, please contact us at (480) 418-7633.</p>
+<p style="margin-top:12px;color:#aaa">If you need to sign your agreement, please contact us at (480) 618-0805.</p>
 </body></html>`);
   }
 
@@ -1022,11 +1045,11 @@ app.post('/agreement/:token/sign', async function(req, res) {
   try {
     booking = await dbGet('agree_' + token);
   } catch(e) {
-    return res.status(500).send('<h2>Database error. Please call (480) 418-7633.</h2>');
+    return res.status(500).send('<h2>Database error. Please call (480) 618-0805.</h2>');
   }
 
   if (!booking) {
-    return res.send('<h2>This agreement link has expired. Please contact us at (480) 418-7633.</h2>');
+    return res.send('<h2>This agreement link has expired. Please contact us at (480) 618-0805.</h2>');
   }
 
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -1042,7 +1065,7 @@ app.post('/agreement/:token/sign', async function(req, res) {
     );
   } catch(e) {
     console.error('Signature DB write error:', e.message);
-    return res.status(500).send('<h2>Could not save signature. Please call (480) 418-7633.</h2>');
+    return res.status(500).send('<h2>Could not save signature. Please call (480) 618-0805.</h2>');
   }
 
   // Generate and store signed PDF in background — dont block the response
@@ -1092,7 +1115,7 @@ app.post('/agreement/:token/sign', async function(req, res) {
         + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + booking.confId + '</td></tr>'
         + '</table>'
         + '<p>Your agreement has been recorded. You are all set for your inspection.</p>'
-        + '<p>Questions? Call or text <strong>(480) 418-7633</strong></p>'
+        + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
       );
       await sendEmail(booking.buyer.email, 'Agreement Signed — ' + booking.confId, clientHtml);
     } catch(e) { console.error('Client agreement confirmation email:', e.message); }
@@ -1131,7 +1154,7 @@ app.get('/cancel/:token', async function(req, res) {
   try {
     booking = await dbGet(req.params.token);
   } catch(e) {
-    return res.send('<h2>Database error. Please try again or call (480) 418-7633.</h2>');
+    return res.send('<h2>Database error. Please try again or call (480) 618-0805.</h2>');
   }
   if (!booking) return res.send('<h2>This link has expired or already been used.</h2>');
   const { confId, fullName, dateFmt, time } = booking;
@@ -1152,15 +1175,6 @@ app.get('/auth/google/callback', async function(req, res) {
   const result = await oAuth2Client.getToken(req.query.code);
   console.log('REFRESH TOKEN:', result.tokens.refresh_token);
   res.send('<pre>Add to Railway as GOOGLE_REFRESH_TOKEN:\n\n' + result.tokens.refresh_token + '</pre>');
-});
-
-// ── SMS REPLY ─────────────────────────────────────────────────
-app.post('/sms/reply', express.urlencoded({ extended: false }), async function(req, res) {
-  const from  = req.body.From || 'Unknown';
-  const body  = req.body.Body || '';
-  if (process.env.OWNER_PHONE) await sms(process.env.OWNER_PHONE, 'Reply from ' + from + ':\n' + body);
-  res.set('Content-Type', 'text/xml');
-  res.send('<Response></Response>');
 });
 
 // ── CONTACT FORM ──────────────────────────────────────────────
@@ -1495,7 +1509,7 @@ app.post('/admin/cancel-booking', async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + (d.time||'') + '</td></tr>'
     + '</table>'
     + '<p>If you would like to reschedule, please contact us:</p>'
-    + '<p>&#128222; <strong>(480) 418-7633</strong><br>&#9993; <strong>santanpropertyinspections@gmail.com</strong></p>'
+    + '<p>&#128222; <strong>(480) 618-0805</strong><br>&#9993; <strong>santanpropertyinspections@gmail.com</strong></p>'
   );
 
   try {
@@ -1513,7 +1527,7 @@ app.post('/admin/cancel-booking', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + (d.dateFmt||'') + '</td></tr>'
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
       + '</table>'
-      + '<p>Questions? Call/text <strong>(480) 418-7633</strong></p>'
+      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     );
     try { await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml); } catch(e) {}
   }
