@@ -1141,8 +1141,14 @@ async function submitBooking(){
       <div class="mr"><div class="mk">Date & Time</div><div class="mv">${ds} at ${b.time}</div></div>
       <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${data.confirmationId}</div></div>`;
     document.getElementById('succMod').classList.add('active');
-  }catch(e){showToast(e.message||'Booking unavailable — please call or text (480) 618-0805 to schedule.',true);}
-  finally{
+    // Keep button locked on success — prevents accidental duplicate bookings if user closes the modal.
+    // Page reload (or new visit) is required to book again.
+    btn.classList.remove('loading');
+    btn.disabled=true;
+    if(btnText)btnText.textContent='Booking Confirmed ✓';
+  }catch(e){
+    showToast(e.message||'Booking unavailable — please call or text (480) 618-0805 to schedule.',true);
+    // Reset only on error — let them try again
     btn.classList.remove('loading');
     btn.disabled=false;
     bookingSubmitted=false;
