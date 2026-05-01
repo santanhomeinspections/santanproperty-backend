@@ -778,15 +778,16 @@ app.get('/confirm/:token', async function(req, res) {
     const r = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: ev, sendUpdates:'all' });
     calId = r.data.id;
     console.log('Calendar event created: ' + calId);
-
-    // Save to confirmed_bookings
-    try {
-      await pool.query(
-        'INSERT INTO confirmed_bookings (conf_id, data) VALUES ($1, $2) ON CONFLICT (conf_id) DO NOTHING',
-        [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() })]
-      );
-    } catch(e) { console.error('DB confirmed save:', e.message); }
   } catch(e) { console.error('Calendar:', e.message); }
+
+  // Save to confirmed_bookings — runs regardless of Calendar success/failure
+  try {
+    await pool.query(
+      'INSERT INTO confirmed_bookings (conf_id, data) VALUES ($1, $2) ON CONFLICT (conf_id) DO NOTHING',
+      [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() })]
+    );
+    console.log('Confirmed booking saved to DB: ' + confId);
+  } catch(e) { console.error('DB confirmed save:', e.message); }
 
   // Generate agreement token for this confirmed booking
   const agreeToken = uuidv4();
