@@ -273,7 +273,7 @@ async function uploadToR2(key, buffer, contentType) {
 
 // ── AGREEMENT TEXT ────────────────────────────────────────────
 // Versioned agreement text — stored with each signed record
-const AGREEMENT_VERSION = '2025-v1';
+const AGREEMENT_VERSION = '2026-v2';
 const AGREEMENT_TEXT = `SAN TAN PROPERTY INSPECTIONS
 Certified Home Inspector — BTR #79346
 Jaren Drummond
@@ -315,7 +315,7 @@ Client must: (1) provide written notification within 10 days of discovery; and (
 Any dispute not resolved by refund of the inspection fee shall be resolved by arbitration. At least one arbitrator must be an Arizona Certified Home Inspector with at least five years of experience. The prevailing party shall be awarded attorney's fees and arbitration costs. Client waives trial by jury.
 
 9. ELECTRONIC SIGNATURE
-An electronic signature shall be deemed valid and binding to the same extent as a handwritten signature.
+This Agreement may be executed electronically in accordance with the federal E-SIGN Act (15 U.S.C. § 7001 et seq.) and the Arizona Electronic Transactions Act (A.R.S. § 44-7001 et seq.). An electronic signature shall be deemed valid and binding to the same extent as a handwritten signature.
 
 10. GENERAL PROVISIONS
 This Agreement constitutes the entire agreement between the parties. If any provision is found invalid, the remaining provisions remain in effect.
