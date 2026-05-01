@@ -845,7 +845,16 @@ app.get('/confirm/:token', async function(req, res) {
   }
   if (!booking) return res.send('<h2>This booking has already been confirmed. Check your inbox for confirmation details, or call (480) 618-0805.</h2>');
 
-  const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge } = booking;
+  const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount } = booking;
+  const tripCharge = booking.tripCharge || { apply: false, miles: 0 };
+
+  // Normalize buyerAgent fields locally — these were created in /api/book but don't survive the round-trip through pending_bookings
+  const ba      = (buyerAgent && typeof buyerAgent === 'object') ? buyerAgent : {};
+  const baName  = ba.name  || '';
+  const baPhone = ba.phone || '';
+  const baEmail = ba.email || '';
+  const baBrok  = ba.brokerage || '';
+  const hasBA   = !!(baName || baPhone || baEmail);
 
   // Token already removed by dbClaim — no separate dbDelete needed
 
@@ -1422,6 +1431,14 @@ tr:hover td{background:rgba(201,168,76,.04);}
     <div id="codeList"><div class="empty">Loading...</div></div>
   </div>
 
+  <div class="card" style="border-left:4px solid #e8a87c">
+    <div class="card-hd">
+      <h2>Pending Bookings <span style="font-size:.7rem;font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(awaiting your CONFIRM tap)</span></h2>
+      <div style="display:flex;gap:8px;align-items:center"><span id="pendingCount">—</span><button onclick="clearAllPending()" style="background:#C0392B;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:.7rem;cursor:pointer">Clear All</button></div>
+    </div>
+    <div id="pendingTable"><div class="empty">Loading...</div></div>
+  </div>
+
   <div class="card">
     <div class="card-hd"><h2>Confirmed Bookings</h2><span id="bookingCount">—</span></div>
     <div id="bookingTable"><div class="empty">Loading...</div></div>
@@ -1459,6 +1476,7 @@ async function load() {
       '<div class="stat"><div class="lbl">Reschedule Requests</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
 
     renderCodes(d.codes || []);
+    renderPending(d.pending || []);
 
     document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
     if (!d.bookings.length) {
@@ -1565,6 +1583,43 @@ async function deleteCode(code) {
   load();
 }
 
+function renderPending(rows) {
+  const el = document.getElementById('pendingTable');
+  document.getElementById('pendingCount').textContent = rows.length + ' pending';
+  if (!rows.length) { el.innerHTML = '<div class="empty">No pending bookings.</div>'; return; }
+  // Build a simple table — pending bookings don't need all the columns confirmed ones do
+  const rowsHtml = rows.map(function(r) {
+    const d = r.data || {};
+    const created = new Date(r.created_at);
+    const ageMins = Math.floor((Date.now() - created.getTime()) / 60000);
+    const ageStr = ageMins < 60 ? ageMins + 'm ago' : ageMins < 1440 ? Math.floor(ageMins/60) + 'h ago' : Math.floor(ageMins/1440) + 'd ago';
+    return '<tr>' +
+      '<td><div class="conf">' + (d.confId || '—') + '</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
+      '<td><div class="name">' + (d.fullName || '') + '</div><div class="addr">' + (d.address || '') + '</div></td>' +
+      '<td><div class="svc">' + (d.svcLabel || '') + '</div></td>' +
+      '<td><div style="font-size:.85rem;color:#E8DEC4">' + (d.dateFmt || '') + '</div><div style="font-size:.72rem;color:#4A5A7A">@ ' + (d.time || '') + '</div></td>' +
+      '<td><div class="price">$' + (d.finalPrice || '—') + '</div><button data-action="delete-pending" data-token="' + r.token + '" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Delete</button></td>' +
+      '</tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>Conf #</th><th>Customer / Address</th><th>Service</th><th>Date / Time</th><th>Price</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+}
+
+async function deletePending(token) {
+  if (!confirm('Delete this pending booking? This frees the slot for other customers.')) return;
+  const r = await fetch('/admin/delete-pending', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({token}) });
+  const data = await r.json();
+  if (data.success) { load(); }
+  else { alert('Error: ' + (data.error || 'Unknown')); }
+}
+
+async function clearAllPending() {
+  if (!confirm('Clear ALL pending bookings? This frees every locked slot from bookings that you never tapped CONFIRM on. Use this for cleaning up after testing.')) return;
+  const r = await fetch('/admin/clear-all-pending', { method:'POST', headers:{'Authorization':'Basic ' + btoa(':monroe')} });
+  const data = await r.json();
+  if (data.success) { alert('Cleared ' + data.deleted + ' pending booking(s).'); load(); }
+  else { alert('Error: ' + (data.error || 'Unknown')); }
+}
+
 async function setPayment(confId, method) {
   // method: '' = unpaid, 'cash'|'card'|'venmo'|'zelle' = paid w/ method, '__unpaid' = unpaid
   const r = await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId, method}) });
@@ -1586,9 +1641,11 @@ document.addEventListener('click', function(e) {
   const action = btn.dataset.action;
   const id = btn.dataset.id;
   const code = btn.dataset.code;
+  const token = btn.dataset.token;
   if (action === 'cancel') cancelBooking(id);
   if (action === 'hard-delete') hardDelete(id);
   if (action === 'deletecode') deleteCode(code);
+  if (action === 'delete-pending') deletePending(token);
 });
 
 // Event delegation for payment dropdown changes
@@ -1837,15 +1894,36 @@ app.get('/admin/data', async function(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const [bookings, reschedules, codes] = await Promise.all([
+    const [bookings, reschedules, codes, pending] = await Promise.all([
       pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
+      pool.query("SELECT token, data, created_at FROM pending_bookings WHERE created_at > NOW() - INTERVAL '48 hours' ORDER BY created_at DESC"),
     ]);
-    res.json({ bookings: bookings.rows, reschedules: reschedules.rows, codes: codes.rows });
+    res.json({ bookings: bookings.rows, reschedules: reschedules.rows, codes: codes.rows, pending: pending.rows });
   } catch(e) {
     res.status(500).json({ error: 'DB error' });
   }
+});
+
+// Delete a single pending booking (frees its slot immediately)
+app.post('/admin/delete-pending', async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'No token' });
+  try {
+    await pool.query('DELETE FROM pending_bookings WHERE token = $1', [token]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Clear ALL pending bookings — for cleaning up after testing
+app.post('/admin/clear-all-pending', async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const r = await pool.query('DELETE FROM pending_bookings RETURNING token');
+    res.json({ success: true, deleted: r.rows.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── START ─────────────────────────────────────────────────────
