@@ -62,6 +62,7 @@ async function initDb() {
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_signature TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_ip TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_pdf_key TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -100,6 +101,12 @@ async function dbSet(token, data) {
 
 async function dbGet(token) {
   const r = await pool.query('SELECT data FROM pending_bookings WHERE token = $1', [token]);
+  return r.rows.length ? r.rows[0].data : null;
+}
+
+async function dbClaim(token) {
+  // Atomic: deletes the token AND returns its data. If two requests race, only one returns data.
+  const r = await pool.query('DELETE FROM pending_bookings WHERE token = $1 RETURNING data', [token]);
   return r.rows.length ? r.rows[0].data : null;
 }
 
@@ -269,6 +276,26 @@ async function uploadToR2(key, buffer, contentType) {
     ContentType: contentType,
   }));
   return key;
+}
+
+async function downloadFromR2(key) {
+  const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+  const client = new S3Client({
+    region: 'auto',
+    endpoint: process.env.R2_ENDPOINT,
+    credentials: {
+      accessKeyId:     process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  const result = await client.send(new GetObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    Key:    key,
+  }));
+  // Convert stream to Buffer
+  const chunks = [];
+  for await (const chunk of result.Body) chunks.push(chunk);
+  return Buffer.concat(chunks);
 }
 
 // ── AGREEMENT TEXT ────────────────────────────────────────────
@@ -573,11 +600,35 @@ app.get('/api/availability', async function(req, res) {
   const BUFFER_MINS    = 120;
   const totalBlockMins = inspDuration + BUFFER_MINS;
 
+  // Pull DB bookings for this date — both pending (awaiting owner confirm) and confirmed (not cancelled).
+  // This locks slots immediately on customer submit, before calendar event creation.
+  // Cancelled bookings (cancelled_at IS NOT NULL) and pending bookings older than 48h are excluded automatically.
+  let dbBookings = [];
+  try {
+    const dbRes = await pool.query(`
+      SELECT data->>'time' AS time, data->>'totalMins' AS mins, 'pending' AS source
+        FROM pending_bookings
+       WHERE data->>'date' = $1
+         AND created_at > NOW() - INTERVAL '48 hours'
+      UNION ALL
+      SELECT data->>'time' AS time, data->>'totalMins' AS mins, 'confirmed' AS source
+        FROM confirmed_bookings
+       WHERE data->>'date' = $1
+         AND cancelled_at IS NULL
+    `, [date]);
+    dbBookings = dbRes.rows;
+  } catch(e) {
+    console.warn('Availability DB query failed (using calendar only):', e.message);
+  }
+
   try {
     const timeMin = `${date}T00:00:00-07:00`;
     const timeMax = `${date}T23:59:59-07:00`;
     const [mainResp, blockResp] = await Promise.all([
-      calendar.events.list({ calendarId: CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }),
+      calendar.events.list({ calendarId: CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }).catch(function(e){
+        console.warn('Main calendar fetch failed:', e.message);
+        return { data: { items: [] } };
+      }),
       calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin, timeMax, singleEvents: true, orderBy: 'startTime' }).catch(function(e){
         console.warn('Block calendar fetch failed:', e.message);
         return { data: { items: [] } };
@@ -587,6 +638,24 @@ app.get('/api/availability', async function(req, res) {
     const dayBlocked = allItems.some(function(ev){ return ev.start && ev.start.date && !ev.start.dateTime; });
     if (dayBlocked) return res.json({ date, booked: ALL_SLOTS, available: [], dayBlocked: true });
 
+    // Convert calendar events into the same shape as DB bookings (start time + end time).
+    const calendarEvents = allItems.filter(function(ev){ return ev.start && ev.start.dateTime; }).map(function(ev){
+      const evStart = new Date(ev.start.dateTime);
+      const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
+      return { start: evStart, end: evEnd };
+    });
+
+    // Convert DB bookings into the same shape (start/end Date objects).
+    const dbEvents = dbBookings.filter(function(b){ return b.time; }).map(function(b){
+      const bMins = slotToMins(b.time);
+      const bH = Math.floor(bMins/60), bM = bMins%60;
+      const bStart = new Date(`${date}T${String(bH).padStart(2,'0')}:${String(bM).padStart(2,'0')}:00-07:00`);
+      const bEnd   = new Date(bStart.getTime() + (parseInt(b.mins)||120) * 60000);
+      return { start: bStart, end: bEnd };
+    });
+
+    const allEvents = [...calendarEvents, ...dbEvents];
+
     const booked = [];
     for (let s = 0; s < ALL_SLOTS.length; s++) {
       const slot    = ALL_SLOTS[s];
@@ -595,17 +664,11 @@ app.get('/api/availability', async function(req, res) {
       const slotStart = new Date(`${date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
       const slotEnd   = new Date(slotStart.getTime() + inspDuration * 60000);
 
-      for (let i = 0; i < allItems.length; i++) {
-        const ev = allItems[i];
-        if (!ev.start || !ev.start.dateTime) continue;
-        const evStart = new Date(ev.start.dateTime);
-        const evEnd   = ev.end && ev.end.dateTime ? new Date(ev.end.dateTime) : new Date(evStart.getTime() + 60*60000);
-        // Block slot if it conflicts with the event itself OR starts within BUFFER_MINS after the event ends.
-        // No buffer is applied BEFORE the event — slot is fine if it ends at or before the event starts.
-        const evBlockEnd = new Date(evEnd.getTime() + BUFFER_MINS*60000);
-        // Slot is blocked if [slotStart, slotEnd] overlaps the event itself, OR slotStart falls within the buffer window
-        const overlapsEvent = slotStart < evEnd && slotEnd > evStart;
-        const inBufferWindow = slotStart >= evEnd && slotStart <= evBlockEnd;
+      for (let i = 0; i < allEvents.length; i++) {
+        const ev = allEvents[i];
+        const evBlockEnd = new Date(ev.end.getTime() + BUFFER_MINS*60000);
+        const overlapsEvent = slotStart < ev.end && slotEnd > ev.start;
+        const inBufferWindow = slotStart >= ev.end && slotStart <= evBlockEnd;
         if ((overlapsEvent || inBufferWindow) && !booked.includes(slot)) {
           booked.push(slot); break;
         }
@@ -652,6 +715,44 @@ app.post('/api/book', async function(req, res) {
   if(!buyer||!buyer.email) miss.push('buyer.email');
   // Buyer's agent is OPTIONAL — no validation
   if(miss.length) return res.status(400).json({ error:'Missing: '+miss.join(', ') });
+
+  // Server-side dup-guard: reject if same buyer email already booked the same date+time slot
+  // within the last 5 minutes. Catches accidental double-submits from frantic clickers.
+  try {
+    const dupCheck = await pool.query(
+      `SELECT conf_id FROM confirmed_bookings
+       WHERE cancelled_at IS NULL
+         AND data->'buyer'->>'email' = $1
+         AND data->>'date' = $2
+         AND data->>'time' = $3
+         AND confirmed_at > NOW() - INTERVAL '5 minutes'
+       LIMIT 1`,
+      [buyer.email, date, time]
+    );
+    if (dupCheck.rows.length) {
+      return res.status(409).json({
+        error: 'You already have a booking for this date and time. Confirmation # ' + dupCheck.rows[0].conf_id + '. Check your email or call (480) 618-0805 if you didn\'t receive it.'
+      });
+    }
+    // Also check pending_bookings for very-recent duplicates not yet confirmed
+    const pendDup = await pool.query(
+      `SELECT token FROM pending_bookings
+       WHERE data->'buyer'->>'email' = $1
+         AND data->>'date' = $2
+         AND data->>'time' = $3
+         AND created_at > NOW() - INTERVAL '5 minutes'
+       LIMIT 1`,
+      [buyer.email, date, time]
+    );
+    if (pendDup.rows.length) {
+      return res.status(409).json({
+        error: 'You\'ve already submitted a booking for this date and time — please check your email for confirmation. Call (480) 618-0805 if anything looks wrong.'
+      });
+    }
+  } catch(e) {
+    console.error('Dup-check failed (allowing booking through):', e.message);
+    // Don't block the booking on a dup-check DB hiccup — fall through
+  }
 
   // Normalize buyerAgent to safe object so downstream code can read .name/.phone/.email/.brokerage without crashing
   const ba = (buyerAgent && typeof buyerAgent === 'object') ? buyerAgent : {};
@@ -736,16 +837,17 @@ app.post('/api/book', async function(req, res) {
 app.get('/confirm/:token', async function(req, res) {
   let booking;
   try {
-    booking = await dbGet(req.params.token);
+    // Atomically claim the booking — if a previous click already claimed it, this returns null.
+    booking = await dbClaim(req.params.token);
   } catch(e) {
-    console.error('DB read error:', e.message);
+    console.error('DB claim error:', e.message);
     return res.send('<h2>Database error. Please try again or call (480) 618-0805.</h2>');
   }
-  if (!booking) return res.send('<h2>This confirmation link has expired or already been used.</h2>');
+  if (!booking) return res.send('<h2>This booking has already been confirmed. Check your inbox for confirmation details, or call (480) 618-0805.</h2>');
 
   const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge } = booking;
 
-  try { await dbDelete(req.params.token); } catch(e) { console.error('DB delete error:', e.message); }
+  // Token already removed by dbClaim — no separate dbDelete needed
 
   const sm2     = slotToMins(time);
   const slotH2  = Math.floor(sm2/60), slotM2 = sm2%60;
@@ -818,7 +920,7 @@ app.get('/confirm/:token', async function(req, res) {
 
   if (sellerAgent && sellerAgent.phone) {
     await sms(sellerAgent.phone,
-      'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nIMPORTANT: Please send the CBS code so I can access the home, and reply to this message to confirm the inspection.\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
   }
 
@@ -920,6 +1022,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + '</td></tr>'
       + '</table>'
       + '<ul style="margin:12px 0 12px 20px"><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
+      + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0"><p style="margin:0;font-size:.92rem"><strong style="color:#1B2D52">Important:</strong> Please send the <strong>CBS code</strong> so I can access the home, and reply to confirm the inspection.</p></div>'
       + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>Note:</strong> If utilities are not on at the time of inspection, a $125 re-inspection fee will apply.</p>'
       + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
     );
@@ -1370,21 +1473,29 @@ async function load() {
         const isPaid = !!b.paid_at;
         const isCancelled = !!b.cancelled_at;
         const isSigned = !!b.agreement_signed_at;
+        const payMethod = b.payment_method || '';
         const signedBadge = isCancelled ? '' : (isSigned
           ? '<span class="badge badge-signed">Signed</span>'
           : '<span class="badge badge-unsigned">Unsigned</span>');
-        const paidBtn = isCancelled
+        const pdfLink = (isSigned && b.agreement_pdf_key)
+          ? '<a href="/admin/agreement-pdf/'+bd.confId+'" target="_blank" style="display:inline-block;background:#243660;color:#C9A84C;border:1px solid #344870;border-radius:5px;padding:4px 10px;font-size:.72rem;text-decoration:none;margin-left:4px">View PDF</a>'
+          : '';
+        // Payment method dropdown — selecting a method auto-marks paid
+        const payOptions = ['cash','card','venmo','zelle']
+          .map(function(m){ return '<option value="'+m+'"'+(payMethod===m?' selected':'')+'>'+m.charAt(0).toUpperCase()+m.slice(1)+'</option>'; })
+          .join('');
+        const payDropdown = isCancelled
           ? '<span style="color:#C0392B;font-size:.72rem;font-weight:700">CANCELLED</span>'
-          : (isPaid
-            ? '<button data-action="unpaid" data-id="'+bd.confId+'" style="background:#243660;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">&#10003; Paid &mdash; Undo</button>'
-            : '<button data-action="paid" data-id="'+bd.confId+'" style="background:#1ab464;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Mark as Paid</button>');
-        const cancelBtn = isCancelled ? '' : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
+          : '<select data-action="setpay" data-id="'+bd.confId+'" style="background:'+(isPaid?'#1ab464':'#243660')+';color:'+(isPaid?'white':'#8A9AB5')+';border:1px solid '+(isPaid?'#1ab464':'#344870')+';border-radius:5px;padding:4px 8px;font-size:.72rem;margin-top:4px;cursor:pointer;font-weight:'+(isPaid?'700':'400')+'"><option value="">'+(isPaid?'Paid — change?':'Mark paid…')+'</option>'+payOptions+(isPaid?'<option value="__unpaid">— Unpaid</option>':'')+'</select>';
+        const cancelBtn = isCancelled
+          ? '<button data-action="hard-delete" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Delete</button>'
+          : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
           '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
           '<td><div class="agent">'+(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+'</div><div>'+paidBtn+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1454,6 +1565,20 @@ async function deleteCode(code) {
   load();
 }
 
+async function setPayment(confId, method) {
+  // method: '' = unpaid, 'cash'|'card'|'venmo'|'zelle' = paid w/ method, '__unpaid' = unpaid
+  const r = await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId, method}) });
+  load();
+}
+
+async function hardDelete(confId) {
+  if (!confirm('PERMANENTLY DELETE booking ' + confId + '? This removes it from the database. Use this for test bookings only.')) return;
+  const r = await fetch('/admin/hard-delete-booking', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  const data = await r.json();
+  if (data.success) { load(); }
+  else { alert('Error: ' + (data.error||'Unknown error')); }
+}
+
 // Event delegation for booking action buttons
 document.addEventListener('click', function(e) {
   const btn = e.target.closest('button[data-action]');
@@ -1461,10 +1586,19 @@ document.addEventListener('click', function(e) {
   const action = btn.dataset.action;
   const id = btn.dataset.id;
   const code = btn.dataset.code;
-  if (action === 'paid') markPaid(id);
-  if (action === 'unpaid') markUnpaid(id);
   if (action === 'cancel') cancelBooking(id);
+  if (action === 'hard-delete') hardDelete(id);
   if (action === 'deletecode') deleteCode(code);
+});
+
+// Event delegation for payment dropdown changes
+document.addEventListener('change', function(e) {
+  const sel = e.target.closest('select[data-action="setpay"]');
+  if (!sel) return;
+  const id = sel.dataset.id;
+  const method = sel.value;
+  if (method === '') return;  // ignore the placeholder option
+  setPayment(id, method === '__unpaid' ? '' : method);
 });
 
 load();
@@ -1553,6 +1687,71 @@ app.post('/admin/mark-unpaid', async function(req, res) {
     await pool.query('UPDATE confirmed_bookings SET paid_at = NULL WHERE conf_id = $1', [confId]);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Set payment method + auto-mark paid (or unpaid if method blank)
+app.post('/admin/set-payment', async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId, method } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+  const allowed = ['cash', 'card', 'venmo', 'zelle', ''];
+  if (!allowed.includes(method)) return res.status(400).json({ error: 'Invalid method' });
+  try {
+    if (method) {
+      // Method provided → mark paid + record method
+      await pool.query(
+        'UPDATE confirmed_bookings SET paid_at = COALESCE(paid_at, NOW()), payment_method = $1 WHERE conf_id = $2',
+        [method, confId]
+      );
+    } else {
+      // Empty → unpaid (clear both)
+      await pool.query(
+        'UPDATE confirmed_bookings SET paid_at = NULL, payment_method = NULL WHERE conf_id = $1',
+        [confId]
+      );
+    }
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Permanently delete a booking from the DB (use for test bookings only)
+app.post('/admin/hard-delete-booking', async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+  try {
+    // Best-effort: try to delete calendar event if one was created
+    const r = await pool.query('SELECT data FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (r.rows.length && r.rows[0].data && r.rows[0].data.calId) {
+      try { await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: r.rows[0].data.calId, sendUpdates: 'none' }); }
+      catch(e) { console.warn('Calendar delete (hard-delete):', e.message); }
+    }
+    await pool.query('DELETE FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    console.log('Hard-deleted booking: ' + confId);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stream signed agreement PDF from R2 to admin browser
+app.get('/admin/agreement-pdf/:confId', async function(req, res) {
+  if (!checkAdmin(req)) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const { confId } = req.params;
+  try {
+    const r = await pool.query('SELECT agreement_pdf_key FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length || !r.rows[0].agreement_pdf_key) {
+      return res.status(404).send('No signed agreement on file for ' + confId);
+    }
+    const pdf = await downloadFromR2(r.rows[0].agreement_pdf_key);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="' + confId + '-agreement.pdf"');
+    res.send(pdf);
+  } catch(e) {
+    console.error('Agreement PDF fetch:', e.message);
+    res.status(500).send('Could not retrieve PDF: ' + e.message);
+  }
 });
 
 app.get('/admin/csv', async function(req, res) {
