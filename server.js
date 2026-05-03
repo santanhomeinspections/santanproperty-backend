@@ -62,6 +62,10 @@ async function initDb() {
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_signature TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_ip TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS agreement_pdf_key TEXT DEFAULT NULL`);
+    // Counter-signature: when Jaren reviews and counter-signs the executed agreement
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS counter_signed_at TIMESTAMPTZ DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS counter_signed_by TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS counter_signed_pdf_key TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
@@ -217,10 +221,19 @@ async function checkTripCharge(address) {
 }
 
 // ── EMAIL ─────────────────────────────────────────────────────
-async function sendEmail(to, subject, html) {
+async function sendEmail(to, subject, html, attachments) {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(function(){ controller.abort(); }, 8000);
+    // 15s — bumped from 8s because attachments make the request larger
+    const timeout = setTimeout(function(){ controller.abort(); }, 15000);
+    const body = {
+      from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
+      reply_to: 'santanpropertyinspections@gmail.com',
+      to: to,
+      subject: subject,
+      html: html,
+    };
+    if (attachments && attachments.length) body.attachments = attachments;
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       signal: controller.signal,
@@ -228,13 +241,7 @@ async function sendEmail(to, subject, html) {
         'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
-        reply_to: 'santanpropertyinspections@gmail.com',
-        to: to,
-        subject: subject,
-        html: html,
-      }),
+      body: JSON.stringify(body),
     });
     clearTimeout(timeout);
     const data = await r.json();
@@ -584,6 +591,132 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
     return pdf;
   } catch(e) {
     console.error('Agreement PDF generation failed:', e.message);
+    return null;
+  }
+}
+
+// ── EXECUTED (COUNTER-SIGNED) AGREEMENT PDF ───────────────────
+// Generates the fully-executed agreement: client signature + inspector counter-signature.
+// Called after Jaren reviews and counter-signs from the admin page.
+async function generateExecutedAgreementPdf(booking, signedAt, signature, ip, counterSignedAt, counterSignedBy) {
+  const { confId, address, dateFmt, time, fullName, finalPrice, addonsLine } = booking;
+  const signedDate        = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
+  const counterSignedDate = new Date(counterSignedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+body{font-family:Arial,sans-serif;font-size:10pt;color:#222;margin:48px;line-height:1.6;}
+h1{font-size:14pt;color:#1B2D52;margin-bottom:4px;}
+h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
+.header{text-align:center;border-bottom:2px solid #C9A84C;padding-bottom:12px;margin-bottom:20px;position:relative;}
+.header .biz{font-size:16pt;font-weight:700;color:#1B2D52;}
+.header .sub{font-size:9pt;color:#666;margin-top:4px;}
+.executed-badge{position:absolute;top:0;right:0;background:#1B2D52;color:#C9A84C;padding:6px 12px;font-size:9pt;font-weight:700;letter-spacing:1.5px;border-radius:3px;}
+.info-grid{display:grid;grid-template-columns:120px 1fr;gap:4px 12px;margin-bottom:20px;font-size:9.5pt;}
+.info-grid .lbl{color:#666;}
+.info-grid .val{font-weight:600;}
+.agreement-text{font-size:8.5pt;line-height:1.65;white-space:pre-wrap;background:#f8f8f8;border:1px solid #ddd;padding:14px;border-radius:4px;margin-bottom:20px;}
+.sig-block{border-top:2px solid #1B2D52;padding-top:16px;margin-top:20px;}
+.parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:16px;}
+.party{border:1px solid #ddd;border-radius:6px;padding:14px;background:#fafafa;}
+.party h3{margin:0 0 10px 0;font-size:9.5pt;color:#1B2D52;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #ddd;padding-bottom:6px;}
+.party .row{margin-bottom:10px;}
+.party .lbl{color:#666;font-size:8pt;display:block;margin-bottom:2px;}
+.party .val{font-size:11pt;font-weight:600;border-bottom:1.5px solid #333;padding-bottom:3px;font-family:'Brush Script MT',cursive;}
+.party .meta{font-size:8.5pt;color:#444;font-weight:400;font-family:Arial,sans-serif;border:none;padding:0;}
+.record{background:#EAF3FB;border:1px solid #1B2D52;border-radius:4px;padding:10px 14px;font-size:8pt;color:#444;margin-top:16px;}
+.record strong{color:#1B2D52;}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="executed-badge">FULLY EXECUTED</div>
+  <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
+  <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
+  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+</div>
+
+<h1>HOME INSPECTION AGREEMENT</h1>
+
+<div class="info-grid">
+  <span class="lbl">Client</span><span class="val">${fullName}</span>
+  <span class="lbl">Property</span><span class="val">${address}</span>
+  <span class="lbl">Inspection Date</span><span class="val">${dateFmt} @ ${time}</span>
+  <span class="lbl">Add-On Services</span><span class="val">${addonsLine || 'None'}</span>
+  <span class="lbl">Est. Total</span><span class="val">$${finalPrice}</span>
+  <span class="lbl">Confirmation #</span><span class="val">${confId}</span>
+</div>
+
+<div class="agreement-text">${AGREEMENT_TEXT}</div>
+
+<div class="sig-block">
+  <h2>Signatures of the Parties</h2>
+  <div class="parties">
+    <div class="party">
+      <h3>Client</h3>
+      <div class="row">
+        <div class="lbl">Electronic Signature</div>
+        <div class="val">${signature}</div>
+      </div>
+      <div class="row">
+        <div class="lbl">Printed Name</div>
+        <div class="meta">${fullName}</div>
+      </div>
+      <div class="row">
+        <div class="lbl">Date Signed</div>
+        <div class="meta">${signedDate} (AZ)</div>
+      </div>
+      <div class="row">
+        <div class="lbl">IP Address</div>
+        <div class="meta">${ip}</div>
+      </div>
+    </div>
+    <div class="party">
+      <h3>Inspector (Counter-Signature)</h3>
+      <div class="row">
+        <div class="lbl">Electronic Signature</div>
+        <div class="val">${counterSignedBy}</div>
+      </div>
+      <div class="row">
+        <div class="lbl">Printed Name</div>
+        <div class="meta">${counterSignedBy}</div>
+      </div>
+      <div class="row">
+        <div class="lbl">Date Counter-Signed</div>
+        <div class="meta">${counterSignedDate} (AZ)</div>
+      </div>
+      <div class="row">
+        <div class="lbl">License</div>
+        <div class="meta">AZ BTR #79346</div>
+      </div>
+    </div>
+  </div>
+  <div class="record">
+    <strong>Execution Record:</strong> This agreement is fully executed.
+    Client electronically signed on ${signedDate}. Inspector counter-signed on ${counterSignedDate}.
+    Both signatures are legally binding pursuant to the terms of Section 9 of this Agreement.<br>
+    Agreement Version: ${AGREEMENT_VERSION} &nbsp;|&nbsp; Confirmation: ${confId} &nbsp;|&nbsp; Client IP: ${ip}
+  </div>
+</div>
+</body>
+</html>`;
+
+  try {
+    const puppeteer = require('puppeteer');
+    const browser = await puppeteer.launch({
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'],
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdf = await page.pdf({ format: 'Letter', printBackground: true, margin: { top:'0.5in', right:'0.5in', bottom:'0.5in', left:'0.5in' } });
+    await browser.close();
+    return pdf;
+  } catch(e) {
+    console.error('Executed agreement PDF generation failed:', e.message);
     return null;
   }
 }
@@ -1421,6 +1554,11 @@ tr:hover td{background:rgba(201,168,76,.04);}
     <a href="/admin/csv" style="background:#C9A84C;color:#0F1C35;font-weight:700;font-size:.82rem;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block;">Export CSV</a>
   </div>
 
+  <div class="card" style="margin-bottom:20px;border-left:4px solid #C9A84C">
+    <div class="card-hd"><h2>Business Health</h2><span style="font-size:.7rem;font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">Last 30 days</span></div>
+    <div id="healthBody" style="padding:18px 20px"><div class="empty">Loading...</div></div>
+  </div>
+
   <div class="card" style="margin-bottom:20px">
     <div class="card-hd"><h2>Discount Codes</h2></div>
     <div style="padding:16px 20px;border-bottom:1px solid #243660;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
@@ -1477,6 +1615,7 @@ async function load() {
 
     renderCodes(d.codes || []);
     renderPending(d.pending || []);
+    renderHealth(d.bookings || [], d.reschedules || []);
 
     document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
     if (!d.bookings.length) {
@@ -1491,13 +1630,24 @@ async function load() {
         const isPaid = !!b.paid_at;
         const isCancelled = !!b.cancelled_at;
         const isSigned = !!b.agreement_signed_at;
+        const isCounterSigned = !!b.counter_signed_at;
         const payMethod = b.payment_method || '';
         const signedBadge = isCancelled ? '' : (isSigned
-          ? '<span class="badge badge-signed">Signed</span>'
+          ? (isCounterSigned
+              ? '<span class="badge badge-signed" style="background:#1a8c52">Executed</span>'
+              : '<span class="badge badge-signed">Signed</span>')
           : '<span class="badge badge-unsigned">Unsigned</span>');
         const pdfLink = (isSigned && b.agreement_pdf_key)
           ? '<a href="/admin/agreement-pdf/'+bd.confId+'" target="_blank" style="display:inline-block;background:#243660;color:#C9A84C;border:1px solid #344870;border-radius:5px;padding:4px 10px;font-size:.72rem;text-decoration:none;margin-left:4px">View PDF</a>'
           : '';
+        // Counter-sign UI: button if signed-not-yet-countersigned, link if already countersigned
+        const counterSignUi = isCancelled ? '' : (
+          isSigned && !isCounterSigned
+            ? '<button data-action="countersign" data-id="'+bd.confId+'" style="display:inline-block;background:#C9A84C;color:#1B2D52;border:1px solid #C9A84C;border-radius:5px;padding:4px 10px;font-size:.72rem;font-weight:700;cursor:pointer;margin-left:4px">Counter-Sign</button>'
+            : (isCounterSigned
+                ? '<a href="/admin/executed-pdf/'+bd.confId+'" target="_blank" style="display:inline-block;background:#1a8c52;color:white;border:1px solid #1a8c52;border-radius:5px;padding:4px 10px;font-size:.72rem;text-decoration:none;margin-left:4px">View Executed</a>'
+                : '')
+        );
         // Payment method dropdown — selecting a method auto-marks paid
         const payOptions = ['cash','card','venmo','zelle']
           .map(function(m){ return '<option value="'+m+'"'+(payMethod===m?' selected':'')+'>'+m.charAt(0).toUpperCase()+m.slice(1)+'</option>'; })
@@ -1513,7 +1663,7 @@ async function load() {
           '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
           '<td><div class="agent">'+(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1583,6 +1733,134 @@ async function deleteCode(code) {
   load();
 }
 
+// ─── BUSINESS HEALTH DASHBOARD ─────────────────────────────────
+// Computes rolling 30-day metrics live from booking + reschedule data.
+// All math is client-side so this stays in sync with the existing /admin/data endpoint.
+function renderHealth(bookings, reschedules) {
+  const el = document.getElementById('healthBody');
+  if (!el) return;
+
+  const NOW = Date.now();
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const SIXTY_DAYS_MS  = 60 * 24 * 60 * 60 * 1000;
+
+  const recent = bookings.filter(function(b){ return new Date(b.confirmed_at).getTime() >= NOW - THIRTY_DAYS_MS; });
+  const prior  = bookings.filter(function(b){
+    const t = new Date(b.confirmed_at).getTime();
+    return t >= NOW - SIXTY_DAYS_MS && t < NOW - THIRTY_DAYS_MS;
+  });
+
+  // Drop cancelled from "active" math but include them in cancellation rate
+  const recentActive    = recent.filter(function(b){ return !b.cancelled_at; });
+  const recentCancelled = recent.filter(function(b){ return  b.cancelled_at; });
+
+  const revenue       = recentActive.reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
+  const collected     = recentActive.filter(function(b){return b.paid_at;}).reduce(function(s,b){return s+(b.data.finalPrice||0);},0);
+  const avgTicket     = recentActive.length ? Math.round(revenue / recentActive.length) : 0;
+  const cancelRate    = recent.length ? Math.round((recentCancelled.length / recent.length) * 100) : 0;
+  const signedCount   = recentActive.filter(function(b){ return b.agreement_signed_at; }).length;
+  const signedRate    = recentActive.length ? Math.round((signedCount / recentActive.length) * 100) : 0;
+  const counterCount  = recentActive.filter(function(b){ return b.counter_signed_at; }).length;
+
+  // Compare to prior 30d to show trend
+  const priorActive   = prior.filter(function(b){ return !b.cancelled_at; });
+  const trend = recentActive.length - priorActive.length;
+  const trendStr = trend === 0 ? '' : (trend > 0 ? ' ▲' + trend + ' vs prior 30d' : ' ▼' + Math.abs(trend) + ' vs prior 30d');
+  const trendColor = trend > 0 ? '#1ab464' : (trend < 0 ? '#e8a87c' : '#8A9AB5');
+
+  // Average lead time (days from booking confirmation to inspection date)
+  const leadTimes = recentActive.map(function(b){
+    if (!b.data.date) return null;
+    const inspDate = new Date(b.data.date + 'T12:00:00');
+    const confDate = new Date(b.confirmed_at);
+    return Math.round((inspDate.getTime() - confDate.getTime()) / (24 * 60 * 60 * 1000));
+  }).filter(function(n){ return n !== null && n >= 0; });
+  const avgLead = leadTimes.length ? Math.round(leadTimes.reduce(function(s,n){return s+n;}, 0) / leadTimes.length) : 0;
+
+  // Service type breakdown
+  const svcCount = {};
+  recentActive.forEach(function(b){
+    const svc = (b.data.svcLabel || 'Unknown').replace(/ Inspection$/, '');
+    svcCount[svc] = (svcCount[svc] || 0) + 1;
+  });
+  const svcEntries = Object.entries(svcCount).sort(function(a,b){return b[1]-a[1];});
+
+  // Top 5 referring agents
+  const agentCount = {};
+  recentActive.forEach(function(b){
+    const ba = b.data.buyerAgent;
+    const name = (ba && ba.name) ? ba.name : '(no agent)';
+    if (!agentCount[name]) agentCount[name] = { count: 0, revenue: 0 };
+    agentCount[name].count++;
+    agentCount[name].revenue += (b.data.finalPrice || 0);
+  });
+  const topAgents = Object.entries(agentCount)
+    .sort(function(a,b){ return b[1].count - a[1].count; })
+    .slice(0, 5);
+
+  // Build the markup. Two columns of stats on top, then service + agent breakdowns below.
+  const recentReschedules = reschedules.filter(function(r){ return new Date(r.requested_at).getTime() >= NOW - THIRTY_DAYS_MS; }).length;
+
+  const cardCss = 'background:#1a2541;border:1px solid #243660;border-radius:8px;padding:14px 16px;';
+  const lblCss  = 'font-size:.7rem;color:#8A9AB5;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:6px;';
+  const valCss  = 'font-size:1.6rem;font-weight:700;color:#E8DEC4;';
+  const subCss  = 'font-size:.74rem;color:#8A9AB5;margin-top:4px;';
+
+  let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px">';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Inspections</div><div style="'+valCss+'">'+recentActive.length+'</div><div style="'+subCss+';color:'+trendColor+'">'+trendStr+'</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Revenue Booked</div><div style="'+valCss+';color:#C9A84C">$'+revenue.toLocaleString()+'</div><div style="'+subCss+'">$'+collected.toLocaleString()+' collected</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Avg Ticket</div><div style="'+valCss+'">$'+avgTicket.toLocaleString()+'</div><div style="'+subCss+'">per inspection</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Avg Lead Time</div><div style="'+valCss+'">'+avgLead+'<span style="font-size:.9rem;color:#8A9AB5;margin-left:4px">days</span></div><div style="'+subCss+'">booking → inspection</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Signed Rate</div><div style="'+valCss+';color:'+(signedRate>=80?'#1ab464':signedRate>=60?'#C9A84C':'#e8a87c')+'">'+signedRate+'%</div><div style="'+subCss+'">'+signedCount+' of '+recentActive.length+' agreements</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Counter-Signed</div><div style="'+valCss+';color:'+(counterCount===signedCount?'#1ab464':'#e8a87c')+'">'+counterCount+'</div><div style="'+subCss+'">of '+signedCount+' signed</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Cancellation Rate</div><div style="'+valCss+';color:'+(cancelRate>10?'#e8a87c':'#1ab464')+'">'+cancelRate+'%</div><div style="'+subCss+'">'+recentCancelled.length+' cancelled</div></div>';
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+'">Reschedule Requests</div><div style="'+valCss+'">'+recentReschedules+'</div><div style="'+subCss+'">last 30 days</div></div>';
+  html += '</div>';
+
+  // Two-column section: services & agents
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
+
+  // Services
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+';margin-bottom:12px">Service Mix</div>';
+  if (!svcEntries.length) {
+    html += '<div style="color:#8A9AB5;font-size:.85rem">No data.</div>';
+  } else {
+    svcEntries.forEach(function(entry){
+      const name = entry[0];
+      const count = entry[1];
+      const pct = Math.round((count / recentActive.length) * 100);
+      html += '<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:.82rem;color:#E8DEC4;margin-bottom:3px"><span>'+name+'</span><span style="color:#8A9AB5">'+count+' &middot; '+pct+'%</span></div>';
+      html += '<div style="height:6px;background:#0F1C35;border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:#C9A84C"></div></div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Top agents
+  html += '<div style="'+cardCss+'"><div style="'+lblCss+';margin-bottom:12px">Top Referring Agents</div>';
+  if (!topAgents.length) {
+    html += '<div style="color:#8A9AB5;font-size:.85rem">No data.</div>';
+  } else {
+    topAgents.forEach(function(entry, idx){
+      const name = entry[0];
+      const stats = entry[1];
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;'+(idx<topAgents.length-1?'border-bottom:1px solid #243660':'')+'">';
+      html += '<div><div style="font-size:.85rem;color:#E8DEC4;font-weight:600">'+name+'</div><div style="font-size:.72rem;color:#8A9AB5">'+stats.count+' booking'+(stats.count>1?'s':'')+'</div></div>';
+      html += '<div style="font-size:.85rem;color:#C9A84C;font-weight:700">$'+stats.revenue.toLocaleString()+'</div>';
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  html += '</div>';
+
+  // Empty state if absolutely no recent bookings
+  if (!recent.length) {
+    html = '<div class="empty">No bookings in the last 30 days.</div>';
+  }
+
+  el.innerHTML = html;
+}
+
 function renderPending(rows) {
   const el = document.getElementById('pendingTable');
   document.getElementById('pendingCount').textContent = rows.length + ' pending';
@@ -1646,7 +1924,30 @@ document.addEventListener('click', function(e) {
   if (action === 'hard-delete') hardDelete(id);
   if (action === 'deletecode') deleteCode(code);
   if (action === 'delete-pending') deletePending(token);
+  if (action === 'countersign') counterSign(id, btn);
 });
+
+async function counterSign(confId, btn) {
+  if (!confirm('Counter-sign agreement for ' + confId + '?\\n\\nThis will:\\n  • Generate a fully-executed PDF with both signatures\\n  • Email the executed PDF to the client\\n  • Send you a copy in your email\\n\\nThis action cannot be undone.')) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Working...';
+  try {
+    const r = await fetch('/admin/counter-sign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + btoa(':monroe') },
+      body: JSON.stringify({ confId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('Status ' + r.status));
+    alert('✓ Counter-signed and emailed successfully.');
+    load();  // refresh booking table to show new state
+  } catch(e) {
+    alert('Counter-sign failed: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
 
 // Event delegation for payment dropdown changes
 document.addEventListener('change', function(e) {
@@ -1808,6 +2109,144 @@ app.get('/admin/agreement-pdf/:confId', async function(req, res) {
   } catch(e) {
     console.error('Agreement PDF fetch:', e.message);
     res.status(500).send('Could not retrieve PDF: ' + e.message);
+  }
+});
+
+// Stream the fully-executed (counter-signed) agreement PDF to admin browser.
+app.get('/admin/executed-pdf/:confId', async function(req, res) {
+  if (!checkAdmin(req)) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const { confId } = req.params;
+  try {
+    const r = await pool.query('SELECT counter_signed_pdf_key FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length || !r.rows[0].counter_signed_pdf_key) {
+      return res.status(404).send('No counter-signed agreement on file for ' + confId);
+    }
+    const pdf = await downloadFromR2(r.rows[0].counter_signed_pdf_key);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="' + confId + '-executed-agreement.pdf"');
+    res.send(pdf);
+  } catch(e) {
+    console.error('Executed PDF fetch:', e.message);
+    res.status(500).send('Could not retrieve PDF: ' + e.message);
+  }
+});
+
+// Counter-sign a previously-signed agreement.
+// Generates a new fully-executed PDF, uploads to R2, and emails it to client + owner.
+app.post('/admin/counter-sign', async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+
+  // Owner name comes from env so it stays consistent and we don't trust the browser
+  const counterSignedBy = process.env.OWNER_NAME || 'Jaren Drummond';
+
+  try {
+    const r = await pool.query(
+      'SELECT data, agreement_signed_at, agreement_signature, agreement_ip, counter_signed_at FROM confirmed_bookings WHERE conf_id = $1',
+      [confId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    const row = r.rows[0];
+
+    // Block if not yet client-signed
+    if (!row.agreement_signed_at) {
+      return res.status(400).json({ error: 'Client has not yet signed the agreement. Counter-signature requires the client signature first.' });
+    }
+    // Block if already counter-signed (avoid accidental re-runs that re-email the client)
+    if (row.counter_signed_at) {
+      return res.status(409).json({ error: 'This agreement has already been counter-signed on ' + new Date(row.counter_signed_at).toLocaleString('en-US', { timeZone: 'America/Phoenix' }) });
+    }
+
+    const booking         = row.data || {};
+    const counterSignedAt = new Date().toISOString();
+
+    // Generate the executed PDF (both signatures stamped)
+    const pdf = await generateExecutedAgreementPdf(
+      booking,
+      row.agreement_signed_at,
+      row.agreement_signature,
+      row.agreement_ip || 'unknown',
+      counterSignedAt,
+      counterSignedBy
+    );
+    if (!pdf) {
+      return res.status(500).json({ error: 'Failed to generate executed PDF' });
+    }
+
+    // Upload to R2 under a versioned key so we keep both the client-only and executed PDFs
+    const executedKey = 'agreements/' + confId + '-executed-agreement.pdf';
+    try {
+      await uploadToR2(executedKey, pdf, 'application/pdf');
+    } catch(e) {
+      console.error('Executed PDF R2 upload failed:', e.message);
+      return res.status(500).json({ error: 'Could not save PDF to storage: ' + e.message });
+    }
+
+    // Stamp the counter-sign in the DB
+    await pool.query(
+      `UPDATE confirmed_bookings
+       SET counter_signed_at = $1, counter_signed_by = $2, counter_signed_pdf_key = $3
+       WHERE conf_id = $4`,
+      [counterSignedAt, counterSignedBy, executedKey, confId]
+    );
+
+    // Email the executed PDF to client + owner. Fire-and-forget per recipient so
+    // one failure doesn't kill the others.
+    const pdfBase64 = pdf.toString('base64');
+    const counterSignedDate = new Date(counterSignedAt).toLocaleString('en-US', {
+      timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short',
+    });
+
+    const buyerFirst = (booking.buyer && booking.buyer.firstName) || booking.fullName || 'there';
+
+    // Client email
+    if (booking.buyer && booking.buyer.email) {
+      const clientHtml = emailWrap(
+        '<h2 style="color:#0F1C35">Agreement Fully Executed</h2>'
+        + '<p>Hi ' + buyerFirst + ',</p>'
+        + '<p>Your inspection agreement is now fully executed. Both signatures have been recorded.</p>'
+        + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+        + '<tr><td style="padding:6px 0;color:#888;width:160px">Property</td><td style="color:#2C2C2C;font-weight:600">' + (booking.address || '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Inspection Date</td><td style="color:#2C2C2C;font-weight:600">' + (booking.dateFmt || '') + ' @ ' + (booking.time || '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Counter-Signed</td><td style="color:#2C2C2C;font-weight:600">' + counterSignedDate + ' (AZ)</td></tr>'
+        + '</table>'
+        + '<p>The fully-executed agreement is attached for your records.</p>'
+        + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
+      );
+      sendEmail(
+        booking.buyer.email,
+        'Agreement Fully Executed — ' + confId,
+        clientHtml,
+        [{ filename: confId + '-executed-agreement.pdf', content: pdfBase64 }]
+      ).catch(function(e){ console.error('Client executed-PDF email failed:', e.message); });
+    }
+
+    // Owner email (so Jaren has a copy in inbox)
+    if (process.env.OWNER_EMAIL) {
+      const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
+        + '<h2 style="color:#1B2D52">Counter-Signed: ' + (booking.fullName || '') + '</h2>'
+        + '<p>You counter-signed the inspection agreement for <strong>' + (booking.address || '') + '</strong>.</p>'
+        + '<p>The fully-executed PDF is attached.</p>'
+        + '<p><b>Conf #:</b> ' + confId + '<br>'
+        + '<b>Counter-signed:</b> ' + counterSignedDate + ' (AZ)</p>'
+        + '</div>';
+      sendEmail(
+        process.env.OWNER_EMAIL,
+        'COUNTER-SIGNED: ' + (booking.fullName || '') + ' [' + confId + ']',
+        ownerHtml,
+        [{ filename: confId + '-executed-agreement.pdf', content: pdfBase64 }]
+      ).catch(function(e){ console.error('Owner executed-PDF email failed:', e.message); });
+    }
+
+    res.json({ success: true, counterSignedAt, executedKey });
+  } catch(e) {
+    console.error('counter-sign:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
