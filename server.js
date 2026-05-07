@@ -6,6 +6,7 @@
 require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const { Pool }   = require('pg');
@@ -185,38 +186,243 @@ async function sms(to, body) {
   }
 }
 
+// ── HTML ESCAPING ─────────────────────────────────────────────
+// Used anywhere user-controlled data is interpolated into HTML/email/form output.
+// Prevents stored XSS via booking fields (name, address, agent info, etc.).
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ── INPUT LENGTH LIMITS (H4) ──────────────────────────────────
+// Truncate user input on the server. Prevents 10MB payloads in `notes` from
+// bloating the DB and slowing the admin page render. Always coerce to string
+// so non-string inputs (numbers, objects) become safe values.
+function clip(v, max) {
+  if (v === null || v === undefined) return '';
+  return String(v).slice(0, max);
+}
+const LEN = {
+  name:      100,
+  email:     200,
+  phone:     30,
+  address:   500,
+  notes:     2000,
+  message:   2000,
+  brokerage: 200,
+  code:      40,
+};
+
+// ── RATE LIMITERS (H1) ────────────────────────────────────────
+// Protect public endpoints from bots and brute-force.
+// Configured permissively to avoid blocking real users on shared NATs.
+const bookingLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many booking attempts. Please wait a few minutes or call (480) 618-0805.' },
+});
+const adminAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // Admin actions are frequent; this is mainly to slow brute-force on the basic-auth challenge
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many admin requests — wait 15 minutes.',
+});
+const rescheduleLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many reschedule requests. Please wait a few minutes or call (480) 618-0805.' },
+});
+const agreementLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20, // Agreement page can be opened/refreshed multiple times legitimately
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests — please refresh in a minute or call (480) 618-0805.',
+});
+
+// ── PRICING (server-side, single source of truth) ─────────────
+// Frontend computes the same values for display, but server ALWAYS recomputes
+// from these tables before charging. Never trust client-sent totalPrice — a
+// malicious user could submit totalPrice:1 and steal a $400 inspection.
+//
+// Tables MUST stay in sync with the BASE / ADDONS constants in website index.html.
+// If you change pricing, change it BOTH places (or refactor to fetch from this server).
+const PRICE_BASE = {
+  1000: { p: 400, m: 90  }, 1500: { p: 425, m: 120 }, 2000: { p: 450, m: 150 },
+  2500: { p: 475, m: 180 }, 3000: { p: 550, m: 195 }, 3500: { p: 600, m: 225 },
+  4000: { p: 650, m: 240 }, 4500: { p: 675, m: 270 }, 9999: { p: 750, m: 300 },
+};
+const PRICE_ADDONS = {
+  termite: { p: 85, m: 30, name: 'Termite Inspection (WDO)' },
+  pool:    { p: 60, m: 30, name: 'Pool Inspection' },
+  spa:     { p: 40, m: 20, name: 'Spa Inspection' },
+  shed:    { p: 50, m: 30, name: 'Shed / Out Building' },
+};
+
+function sqftToTier(sqRaw) {
+  const n = Number(sqRaw);
+  if (!n || n <= 0) return null;
+  if (n <= 1000) return 1000;
+  if (n <= 1500) return 1500;
+  if (n <= 2000) return 2000;
+  if (n <= 2500) return 2500;
+  if (n <= 3000) return 3000;
+  if (n <= 3500) return 3500;
+  if (n <= 4000) return 4000;
+  if (n <= 4500) return 4500;
+  return 9999;
+}
+
+// Returns { price, mins, breakdown } recomputed from authoritative server-side tables.
+// addonsInput can be array of strings (legacy) or array of {id} or {name}.
+function computePrice({ sqft, yearBuilt, addons, date, time }) {
+  const tier = sqftToTier(sqft);
+  if (!tier) return null; // Caller should reject the booking
+
+  const base = PRICE_BASE[tier] || { p: 750, m: 300 };
+  let p = base.p;
+  let m = base.m;
+  const breakdown = { tier, base: base.p, age: 0, addons: 0, heat: 0 };
+
+  // Age surcharge
+  const yr = Number(yearBuilt) || 0;
+  if (yr > 0 && yr <= 1959)        { p += 80; m += 30; breakdown.age = 80; }
+  else if (yr >= 1960 && yr <= 1980){ p += 50; m += 30; breakdown.age = 50; }
+
+  // Addons — accept multiple shapes for safety
+  const addonList = Array.isArray(addons) ? addons : [];
+  for (const a of addonList) {
+    let id = null;
+    if (typeof a === 'string') {
+      // Legacy / display string — match by name or id
+      const lower = a.toLowerCase();
+      for (const k of Object.keys(PRICE_ADDONS)) {
+        if (lower === k || lower.indexOf(PRICE_ADDONS[k].name.toLowerCase()) !== -1) { id = k; break; }
+      }
+    } else if (a && typeof a === 'object') {
+      if (a.id && PRICE_ADDONS[a.id]) id = a.id;
+    }
+    if (id && PRICE_ADDONS[id]) {
+      p += PRICE_ADDONS[id].p;
+      m += PRICE_ADDONS[id].m;
+      breakdown.addons += PRICE_ADDONS[id].p;
+    }
+  }
+
+  // Heat surcharge: June/July/August + afternoon (>= 12:00 PM)
+  if (date && time) {
+    const d = new Date(date + 'T00:00:00');
+    const mo = d.getMonth(); // 0-indexed: 5=Jun, 6=Jul, 7=Aug
+    const parts = String(time).split(' ');
+    const hm = parts[0].split(':');
+    let hr = parseInt(hm[0], 10);
+    const period = parts[1];
+    if (period === 'PM' && hr !== 12) hr += 12;
+    if (period === 'AM' && hr === 12) hr = 0;
+    if (mo >= 5 && mo <= 7 && hr >= 12) { p += 50; breakdown.heat = 50; }
+  }
+
+  return { price: p, mins: m, breakdown };
+}
+
 // ── GEO / TRIP CHARGE ─────────────────────────────────────────
+// Trip charge applies when BOTH conditions are true:
+//   1. Booking address is NOT in a service city (exact match on parsed city), AND
+//   2. Driving distance from OWNER_ADDRESS to booking address is >= TRIP_CHARGE_MILES
+//
+// Owner address is geocoded once on first call and cached. Distance uses Google
+// Distance Matrix (driving miles), matching the inspector app's mileage logic.
 const SERVICE_CITIES = ['chandler','gilbert','mesa','tempe','queen creek','san tan valley','florence','apache junction'];
-const BASE_LAT = 33.1534;
-const BASE_LNG = -111.5368;
 const TRIP_CHARGE_MILES = 50;
 const TRIP_CHARGE_AMT   = 50;
 
-function toRad(d){ return d * Math.PI / 180; }
-function milesBetween(lat1,lng1,lat2,lng2){
-  const R=3958.8, dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
-  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+// Cached geocode of OWNER_ADDRESS — populated lazily on first checkTripCharge call.
+let _ownerCoords = null;
+async function getOwnerCoords() {
+  if (_ownerCoords) return _ownerCoords;
+  if (!process.env.OWNER_ADDRESS || !process.env.GOOGLE_MAPS_API_KEY) return null;
+  try {
+    const url = 'https://maps.googleapis.com/maps/api/geocode/json?address='
+      + encodeURIComponent(process.env.OWNER_ADDRESS)
+      + '&key=' + process.env.GOOGLE_MAPS_API_KEY;
+    const r = await fetch(url);
+    const data = await r.json();
+    if (data.status === 'OK' && data.results && data.results[0]) {
+      _ownerCoords = data.results[0].geometry.location; // {lat, lng}
+      console.log('Owner coords cached:', _ownerCoords);
+      return _ownerCoords;
+    }
+    console.warn('Owner geocode failed:', data.status);
+  } catch (e) {
+    console.warn('Owner geocode threw:', e.message);
+  }
+  return null;
+}
+
+// Extract a city name from a freeform address by parsing comma-separated segments.
+// Returns lowercase city if it exactly matches a SERVICE_CITY entry, else null.
+// Handles: "1234 Main St, Gilbert, AZ 85234" → "gilbert"
+//          "1234 Main St, Gilbert AZ 85234"  → "gilbert"
+//          "1234 Florence Blvd, Phoenix, AZ" → null (Phoenix isn't service area; "florence" is in street, not city segment)
+function parseServiceCity(address) {
+  if (!address) return null;
+  const segments = address.split(',').map(s => s.trim().toLowerCase());
+  for (const seg of segments) {
+    // Strip trailing state+zip ("gilbert az 85234" → "gilbert")
+    const cityOnly = seg.replace(/\s+(az|arizona)\s*\d{5}.*$/i, '').replace(/\s+(az|arizona)$/i, '').trim();
+    if (SERVICE_CITIES.indexOf(cityOnly) !== -1) return cityOnly;
+  }
+  return null;
 }
 
 async function checkTripCharge(address) {
-  const addrLower = address.toLowerCase();
-  const inServiceArea = SERVICE_CITIES.some(function(c){ return addrLower.includes(c); });
-  if (inServiceArea) return { apply: false, miles: 0 };
+  // Step 1: city check — if explicitly a service city, no charge regardless of distance
+  const matchedCity = parseServiceCity(address);
+  if (matchedCity) return { apply: false, miles: 0, city: matchedCity };
+
+  // Step 2: distance check — only if not a service city
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    console.warn('Trip charge: missing GOOGLE_MAPS_API_KEY, defaulting to no charge');
+    return { apply: false, miles: 0 };
+  }
+
   try {
-    const encoded = encodeURIComponent(address);
-    const url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encoded + '&key=' + process.env.GOOGLE_MAPS_API_KEY;
+    const owner = await getOwnerCoords();
+    const originParam = owner
+      ? owner.lat + ',' + owner.lng
+      : encodeURIComponent(process.env.OWNER_ADDRESS || '');
+    if (!originParam) return { apply: false, miles: 0 };
+
+    const url = 'https://maps.googleapis.com/maps/api/distancematrix/json'
+      + '?origins=' + originParam
+      + '&destinations=' + encodeURIComponent(address)
+      + '&units=imperial'
+      + '&key=' + process.env.GOOGLE_MAPS_API_KEY;
+
     const controller = new AbortController();
     const timeout = setTimeout(function(){ controller.abort(); }, 4000);
     const r = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     const data = await r.json();
-    if (data.results && data.results[0]) {
-      const loc = data.results[0].geometry.location;
-      const miles = milesBetween(BASE_LAT, BASE_LNG, loc.lat, loc.lng);
-      if (miles >= TRIP_CHARGE_MILES) return { apply: true, miles: Math.round(miles) };
-    }
-  } catch(e) { console.warn('Geocode failed:', e.message); }
+
+    const elem = data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0];
+    if (!elem || elem.status !== 'OK' || !elem.distance) return { apply: false, miles: 0 };
+
+    const miles = elem.distance.value / 1609.344; // meters → miles
+    if (miles >= TRIP_CHARGE_MILES) return { apply: true, miles: Math.round(miles) };
+  } catch (e) {
+    console.warn('Trip charge distance lookup failed:', e.message);
+  }
   return { apply: false, miles: 0 };
 }
 
@@ -814,7 +1020,7 @@ app.get('/api/availability', async function(req, res) {
   }
 });
 
-app.post('/api/book', async function(req, res) {
+app.post('/api/book', bookingLimiter, async function(req, res) {
   const bookingTimeout = setTimeout(function() {
     if (!res.headersSent) {
       res.status(504).json({ error: 'Request timed out. Please try again or call (480) 618-0805.' });
@@ -830,12 +1036,37 @@ app.post('/api/book', async function(req, res) {
   };
 
   const b = req.body;
-  const { address, sqft, yearBuilt, inspType, totalPrice, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
+  let   { address, sqft, yearBuilt, inspType, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
   const addons         = b.addons || [];
-  const extraEmails    = (b.extraEmails || []).filter(function(e){ return e && e.trim(); });
-  const discountCode   = b.discountCode   || null;
-  const discountPct    = b.discountPct    || null;
-  const discountAmount = b.discountAmount || null;
+  const extraEmails    = (b.extraEmails || []).filter(function(e){ return e && e.trim(); }).slice(0, 5).map(e => clip(e, LEN.email));
+  const discountCode   = b.discountCode ? clip(b.discountCode, LEN.code) : null;
+  const discountPct    = b.discountPct   || null;
+  // discountAmount is recomputed below from server price + verified discountPct;
+  // never trust the client value (otherwise you can buy $400 jobs for $1).
+  let   discountAmount = null;
+
+  // ── INPUT LENGTH CLIPPING (H4) ───────────────────────────────
+  // Prevents DB bloat and admin-page slowness from oversized fields.
+  address = clip(address, LEN.address);
+  notes   = clip(notes,   LEN.notes);
+  if (buyer && typeof buyer === 'object') {
+    buyer.firstName = clip(buyer.firstName, LEN.name);
+    buyer.lastName  = clip(buyer.lastName,  LEN.name);
+    buyer.email     = clip(buyer.email,     LEN.email);
+    buyer.phone     = clip(buyer.phone,     LEN.phone);
+  }
+  if (buyerAgent && typeof buyerAgent === 'object') {
+    buyerAgent.name      = clip(buyerAgent.name,      LEN.name);
+    buyerAgent.email     = clip(buyerAgent.email,     LEN.email);
+    buyerAgent.phone     = clip(buyerAgent.phone,     LEN.phone);
+    buyerAgent.brokerage = clip(buyerAgent.brokerage, LEN.brokerage);
+  }
+  if (sellerAgent && typeof sellerAgent === 'object') {
+    sellerAgent.name      = clip(sellerAgent.name,      LEN.name);
+    sellerAgent.email     = clip(sellerAgent.email,     LEN.email);
+    sellerAgent.phone     = clip(sellerAgent.phone,     LEN.phone);
+    sellerAgent.brokerage = clip(sellerAgent.brokerage, LEN.brokerage);
+  }
 
   const miss=[];
   if(!address) miss.push('address');
@@ -848,6 +1079,34 @@ app.post('/api/book', async function(req, res) {
   if(!buyer||!buyer.email) miss.push('buyer.email');
   // Buyer's agent is OPTIONAL — no validation
   if(miss.length) return res.status(400).json({ error:'Missing: '+miss.join(', ') });
+
+  // ── SERVER-SIDE PRICING (authoritative) ──────────────────────
+  // Recompute from authoritative tables. Ignore client-sent totalPrice entirely.
+  const priced = computePrice({ sqft, yearBuilt, addons, date, time });
+  if (!priced) return res.status(400).json({ error: 'Invalid square footage' });
+  let totalPrice = priced.price;
+
+  // If client sent a discount code, verify it server-side and apply % off the recomputed total
+  if (discountCode) {
+    try {
+      const codeRow = await pool.query(
+        'SELECT pct FROM discount_codes WHERE UPPER(code) = UPPER($1) LIMIT 1',
+        [discountCode]
+      );
+      if (codeRow.rows.length) {
+        const pct = Number(codeRow.rows[0].pct) || 0;
+        discountAmount = Math.round(totalPrice * pct / 100);
+        totalPrice    -= discountAmount;
+      }
+    } catch (e) {
+      console.warn('Discount code verify failed:', e.message);
+    }
+  }
+
+  // Sanity: log if client value drastically diverged — could indicate a UI bug or tampering attempt
+  if (b.totalPrice && Math.abs(Number(b.totalPrice) - priced.price) > 1) {
+    console.warn('Price mismatch — client sent $' + b.totalPrice + ', server computed $' + priced.price + ' for', { sqft, yearBuilt, addons, date, time });
+  }
 
   // Server-side dup-guard: reject if same buyer email already booked the same date+time slot
   // within the last 5 minutes. Catches accidental double-submits from frantic clickers.
@@ -1092,10 +1351,10 @@ app.get('/confirm/:token', async function(req, res) {
     + '<div style="background:#FAF7F0;border-radius:8px;padding:16px;margin-top:8px">'
     + '<p style="font-size:.82rem;color:#8C7B6B;margin-bottom:10px"><strong style="color:#1B2D52">Need to reschedule?</strong> Fill out the form below and Jaren will reach out to find a new time.</p>'
     + '<form action="https://santanproperty-backend-production.up.railway.app/api/reschedule" method="POST" style="display:flex;flex-direction:column;gap:8px">'
-    + '<input type="hidden" name="confId" value="' + confId + '"/>'
-    + '<input type="hidden" name="name" value="' + buyer.firstName + ' ' + buyer.lastName + '"/>'
-    + '<input type="hidden" name="phone" value="' + buyer.phone + '"/>'
-    + '<input type="hidden" name="email" value="' + buyer.email + '"/>'
+    + '<input type="hidden" name="confId" value="' + escapeHtml(confId) + '"/>'
+    + '<input type="hidden" name="name" value="' + escapeHtml(buyer.firstName + ' ' + buyer.lastName) + '"/>'
+    + '<input type="hidden" name="phone" value="' + escapeHtml(buyer.phone) + '"/>'
+    + '<input type="hidden" name="email" value="' + escapeHtml(buyer.email) + '"/>'
     + '<textarea name="message" rows="2" placeholder="Preferred dates/times or reason for rescheduling..." style="padding:8px;border:1px solid #E2D9C8;border-radius:6px;font-family:Georgia,serif;font-size:.83rem;resize:vertical"></textarea>'
     + '<button type="submit" style="background:#1B2D52;color:white;padding:9px 20px;border:none;border-radius:6px;font-size:.83rem;font-weight:700;cursor:pointer;align-self:flex-start">Request Reschedule</button>'
     + '</form>'
@@ -1247,7 +1506,7 @@ td:last-child{color:#2C2C2C;font-weight:600;}
 // ── AGREEMENT ROUTES ──────────────────────────────────────────
 
 // Show agreement page
-app.get('/agreement/:token', async function(req, res) {
+app.get('/agreement/:token', agreementLimiter, async function(req, res) {
   const token = req.params.token;
   let booking;
   try {
@@ -1277,7 +1536,7 @@ app.get('/agreement/:token', async function(req, res) {
 });
 
 // Process signature
-app.post('/agreement/:token/sign', async function(req, res) {
+app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
   const token = req.params.token;
   const signature = (req.body.signature || '').trim();
 
@@ -1424,9 +1683,15 @@ app.get('/auth/google/callback', async function(req, res) {
 });
 
 // ── CONTACT FORM ──────────────────────────────────────────────
-app.post('/api/contact', async function(req, res) {
-  const { name, phone, email, role, message } = req.body;
+app.post('/api/contact', rescheduleLimiter, async function(req, res) {
+  let { name, phone, email, role, message } = req.body;
   if (!name || !email || !message) return res.status(400).json({ error: 'Name, email, and message are required.' });
+
+  // Clip lengths
+  name    = clip(name,    LEN.name);
+  phone   = clip(phone,   LEN.phone);
+  email   = clip(email,   LEN.email);
+  message = clip(message, LEN.message);
 
   const roleLabel = {
     'buyer': 'Buyer / Homeowner',
@@ -1458,9 +1723,16 @@ app.post('/api/contact', async function(req, res) {
 });
 
 // ── RESCHEDULE REQUEST ────────────────────────────────────────
-app.post('/api/reschedule', async function(req, res) {
-  const { confId, name, phone, email, message } = req.body;
+app.post('/api/reschedule', rescheduleLimiter, async function(req, res) {
+  let { confId, name, phone, email, message } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email required.' });
+
+  // Clip lengths to prevent DB bloat / oversized emails
+  confId  = clip(confId,  LEN.code);
+  name    = clip(name,    LEN.name);
+  phone   = clip(phone,   LEN.phone);
+  email   = clip(email,   LEN.email);
+  message = clip(message, LEN.message);
 
   try {
     await pool.query(
@@ -1486,7 +1758,13 @@ app.post('/api/reschedule', async function(req, res) {
 });
 
 // ── ADMIN DASHBOARD ───────────────────────────────────────────
-const ADMIN_PASSWORD = 'monroe';
+// Read from env. Fallback to legacy literal so existing deploys don't lock out
+// before the env var is set. After confirming ADMIN_PASSWORD is set in Railway,
+// remove the fallback in a follow-up commit (and rotate the password).
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'monroe';
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn('⚠️  ADMIN_PASSWORD env var not set — using legacy fallback. Set the env var and remove the fallback ASAP.');
+}
 
 function checkAdmin(req) {
   const auth = req.headers['authorization'];
@@ -1494,7 +1772,7 @@ function checkAdmin(req) {
   return pass === ADMIN_PASSWORD;
 }
 
-app.get('/admin', function(req, res) {
+app.get('/admin', adminAuthLimiter, function(req, res) {
   if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
@@ -1587,6 +1865,19 @@ tr:hover td{background:rgba(201,168,76,.04);}
   </div>
 </div>
 <script>
+// XSS guard — wraps any user-controlled string before it goes into innerHTML.
+// Booking fields (name, address, agent info, notes, etc.) come from the public
+// form and could contain malicious HTML. Always pass through esc() before injecting.
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function load() {
   try {
     const r = await fetch('/admin/data');
@@ -1659,11 +1950,11 @@ async function load() {
           ? '<button data-action="hard-delete" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Delete</button>'
           : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         return '<tr>' +
-          '<td><div class="conf">'+bd.confId+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
-          '<td><div class="name">'+(bd.fullName||'')+'</div><div class="addr">'+(bd.address||'')+'</div></td>' +
-          '<td><div class="svc">'+(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+addons+'</div></td>' +
-          '<td><div class="agent">'+(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+(bd.dateFmt||'')+' @ '+(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
+          '<td><div class="conf">'+esc(bd.confId)+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
+          '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
+          '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
+          '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1676,10 +1967,10 @@ async function load() {
       const rrows = d.reschedules.slice().reverse().map(function(r) {
         const dt = new Date(r.requested_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
         return '<tr>' +
-          '<td><div class="name">'+r.name+'</div><div class="svc">'+dt+'</div></td>' +
-          '<td>'+(r.conf_id?'<span class="conf">'+r.conf_id+'</span>':'—')+'</td>' +
-          '<td><div class="svc">'+(r.email||'—')+'</div><div class="svc">'+(r.phone||'—')+'</div></td>' +
-          '<td><div class="resc-msg">'+(r.message||'No message provided.')+'</div></td>' +
+          '<td><div class="name">'+esc(r.name)+'</div><div class="svc">'+dt+'</div></td>' +
+          '<td>'+(r.conf_id?'<span class="conf">'+esc(r.conf_id)+'</span>':'—')+'</td>' +
+          '<td><div class="svc">'+esc(r.email||'—')+'</div><div class="svc">'+esc(r.phone||'—')+'</div></td>' +
+          '<td><div class="resc-msg">'+esc(r.message||'No message provided.')+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('rescheduleTable').innerHTML = '<table><thead><tr><th>Name</th><th>Conf #</th><th>Contact</th><th>Message</th></tr></thead><tbody>'+rrows+'</tbody></table>';
@@ -1691,19 +1982,19 @@ async function load() {
 
 async function cancelBooking(confId) {
   if (!confirm('Cancel booking ' + confId + '? This will delete the calendar event and email the buyer and agent.')) return;
-  const r = await fetch('/admin/cancel-booking', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  const r = await fetch('/admin/cancel-booking', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId}) });
   const data = await r.json();
   if (data.success) { alert('Booking cancelled. Cancellation emails sent.'); load(); }
   else { alert('Error: ' + (data.error||'Unknown error')); }
 }
 
 async function markPaid(confId) {
-  await fetch('/admin/mark-paid', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  await fetch('/admin/mark-paid', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId}) });
   load();
 }
 async function markUnpaid(confId) {
   if (!confirm('Mark as unpaid?')) return;
-  await fetch('/admin/mark-unpaid', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  await fetch('/admin/mark-unpaid', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId}) });
   load();
 }
 
@@ -1721,7 +2012,7 @@ async function addCode() {
   const code = document.getElementById('newCode').value.trim().toUpperCase();
   const pct  = document.getElementById('newPct').value.trim();
   if (!code || !pct) { alert('Enter both a code and a percentage.'); return; }
-  await fetch('/admin/codes/add', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({code,pct}) });
+  await fetch('/admin/codes/add', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({code,pct}) });
   document.getElementById('newCode').value='';
   document.getElementById('newPct').value='';
   load();
@@ -1729,7 +2020,7 @@ async function addCode() {
 
 async function deleteCode(code) {
   if (!confirm('Remove code ' + code + '?')) return;
-  await fetch('/admin/codes/delete', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({code}) });
+  await fetch('/admin/codes/delete', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({code}) });
   load();
 }
 
@@ -1872,11 +2163,11 @@ function renderPending(rows) {
     const ageMins = Math.floor((Date.now() - created.getTime()) / 60000);
     const ageStr = ageMins < 60 ? ageMins + 'm ago' : ageMins < 1440 ? Math.floor(ageMins/60) + 'h ago' : Math.floor(ageMins/1440) + 'd ago';
     return '<tr>' +
-      '<td><div class="conf">' + (d.confId || '—') + '</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
-      '<td><div class="name">' + (d.fullName || '') + '</div><div class="addr">' + (d.address || '') + '</div></td>' +
-      '<td><div class="svc">' + (d.svcLabel || '') + '</div></td>' +
-      '<td><div style="font-size:.85rem;color:#E8DEC4">' + (d.dateFmt || '') + '</div><div style="font-size:.72rem;color:#4A5A7A">@ ' + (d.time || '') + '</div></td>' +
-      '<td><div class="price">$' + (d.finalPrice || '—') + '</div><button data-action="delete-pending" data-token="' + r.token + '" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Delete</button></td>' +
+      '<td><div class="conf">' + esc(d.confId || '—') + '</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
+      '<td><div class="name">' + esc(d.fullName || '') + '</div><div class="addr">' + esc(d.address || '') + '</div></td>' +
+      '<td><div class="svc">' + esc(d.svcLabel || '') + '</div></td>' +
+      '<td><div style="font-size:.85rem;color:#E8DEC4">' + esc(d.dateFmt || '') + '</div><div style="font-size:.72rem;color:#4A5A7A">@ ' + esc(d.time || '') + '</div></td>' +
+      '<td><div class="price">$' + (d.finalPrice || '—') + '</div><button data-action="delete-pending" data-token="' + esc(r.token) + '" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Delete</button></td>' +
       '</tr>';
   }).join('');
   el.innerHTML = '<table><thead><tr><th>Conf #</th><th>Customer / Address</th><th>Service</th><th>Date / Time</th><th>Price</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
@@ -1884,7 +2175,7 @@ function renderPending(rows) {
 
 async function deletePending(token) {
   if (!confirm('Delete this pending booking? This frees the slot for other customers.')) return;
-  const r = await fetch('/admin/delete-pending', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({token}) });
+  const r = await fetch('/admin/delete-pending', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({token}) });
   const data = await r.json();
   if (data.success) { load(); }
   else { alert('Error: ' + (data.error || 'Unknown')); }
@@ -1892,7 +2183,7 @@ async function deletePending(token) {
 
 async function clearAllPending() {
   if (!confirm('Clear ALL pending bookings? This frees every locked slot from bookings that you never tapped CONFIRM on. Use this for cleaning up after testing.')) return;
-  const r = await fetch('/admin/clear-all-pending', { method:'POST', headers:{'Authorization':'Basic ' + btoa(':monroe')} });
+  const r = await fetch('/admin/clear-all-pending', { method:'POST'/* basic auth auto-sent by browser */ });
   const data = await r.json();
   if (data.success) { alert('Cleared ' + data.deleted + ' pending booking(s).'); load(); }
   else { alert('Error: ' + (data.error || 'Unknown')); }
@@ -1900,13 +2191,13 @@ async function clearAllPending() {
 
 async function setPayment(confId, method) {
   // method: '' = unpaid, 'cash'|'card'|'venmo'|'zelle' = paid w/ method, '__unpaid' = unpaid
-  const r = await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId, method}) });
+  const r = await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId, method}) });
   load();
 }
 
 async function hardDelete(confId) {
   if (!confirm('PERMANENTLY DELETE booking ' + confId + '? This removes it from the database. Use this for test bookings only.')) return;
-  const r = await fetch('/admin/hard-delete-booking', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Basic ' + btoa(':monroe')}, body: JSON.stringify({confId}) });
+  const r = await fetch('/admin/hard-delete-booking', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId}) });
   const data = await r.json();
   if (data.success) { load(); }
   else { alert('Error: ' + (data.error||'Unknown error')); }
@@ -1935,7 +2226,7 @@ async function counterSign(confId, btn) {
   try {
     const r = await fetch('/admin/counter-sign', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + btoa(':monroe') },
+      headers: { 'Content-Type': 'application/json', /* Authorization auto-sent by browser */ },
       body: JSON.stringify({ confId })
     });
     const data = await r.json();
@@ -2368,4 +2659,15 @@ app.post('/admin/clear-all-pending', async function(req, res) {
 // ── START ─────────────────────────────────────────────────────
 initDb().then(function() {
   app.listen(PORT, function(){ console.log('San Tan Property Inspections backend on port ' + PORT); });
+});
+
+// Process-level safety net — catches anything that escaped route handlers.
+// Without these, an uncaught exception silently crashes the Node process and
+// Railway restarts cold (mid-flight bookings lost, no signal in logs).
+process.on('unhandledRejection', function(reason) {
+  console.error('[UNHANDLED REJECTION]', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', function(err) {
+  console.error('[UNCAUGHT EXCEPTION]', err && err.stack ? err.stack : err);
+  // Don't exit — log and keep running. Railway will restart if process actually dies.
 });
