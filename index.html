@@ -787,6 +787,7 @@ const SHIFT_GREEN=new Set(['2026-01-01','2026-01-06','2026-01-07','2026-01-12','
 const SHIFT_RED=new Set(['2026-01-02','2026-01-08','2026-01-14','2026-01-20','2026-01-26','2026-02-01','2026-02-07','2026-02-13','2026-02-19','2026-02-25','2026-03-03','2026-03-09','2026-03-15','2026-03-21','2026-03-27','2026-04-02','2026-04-08','2026-04-14','2026-04-20','2026-04-26','2026-05-02','2026-05-08','2026-05-14','2026-05-20','2026-05-26','2026-06-01','2026-06-07','2026-06-13','2026-06-19','2026-06-25','2026-07-01','2026-07-07','2026-07-13','2026-07-19','2026-07-25','2026-07-31','2026-08-06','2026-08-12','2026-08-18','2026-08-24','2026-08-30','2026-09-05','2026-09-11','2026-09-17','2026-09-23','2026-09-29','2026-10-05','2026-10-11','2026-10-17','2026-10-23','2026-10-29','2026-11-04','2026-11-10','2026-11-16','2026-11-22','2026-11-28','2026-12-04','2026-12-10','2026-12-16','2026-12-22','2026-12-28','2027-01-03','2027-01-09','2027-01-15','2027-01-21','2027-01-27','2027-02-02','2027-02-08','2027-02-14','2027-02-20','2027-02-26','2027-03-04','2027-03-10','2027-03-16','2027-03-22','2027-03-28','2027-04-03','2027-04-09','2027-04-15','2027-04-21','2027-04-27','2027-05-03','2027-05-09','2027-05-15','2027-05-21','2027-05-27','2027-06-02','2027-06-08','2027-06-14','2027-06-20','2027-06-26','2027-07-02','2027-07-08','2027-07-14','2027-07-20','2027-07-26','2027-08-01','2027-08-07','2027-08-13','2027-08-19','2027-08-25','2027-08-31','2027-09-06','2027-09-12','2027-09-18','2027-09-24','2027-09-30','2027-10-06','2027-10-12','2027-10-18','2027-10-24','2027-10-30','2027-11-05','2027-11-11','2027-11-17','2027-11-23','2027-11-29','2027-12-05','2027-12-11','2027-12-17','2027-12-23','2027-12-29']);
 
 function dateKey(y,mo,d){return y+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');}
+function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 const SQFT_LBL={1000:'≤ 1,000 sq ft',1500:'1,001–1,500',2000:'1,501–2,000',2500:'2,001–2,500',3000:'2,501–3,000',3500:'3,001–3,500',4000:'3,501–4,000',4500:'4,001–4,500',9999:'4,501+'};
 const INSP_LBL={'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection','new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection','reinspection':'Re-Inspection'};
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -914,10 +915,11 @@ async function pickDay(y,mo,d){
   document.getElementById('timeLbl').textContent=DAYS[selDate.getDay()]+', '+MONTHS[mo]+' '+d;
   const grid=document.getElementById('tGrid');
   grid.innerHTML='<div class="cal-load" style="grid-column:1/-1">Checking availability…</div>';
-  let booked=[],dayBlocked=false;
-  try{const dur=BD.totalM||BD.baseM||360;const r=await fetch(`${API}/availability?date=${BD.dateStr}&duration=${dur}`);const data=await r.json();booked=data.booked||[];dayBlocked=data.dayBlocked||false;}catch(e){}
+  let booked=[],dayBlocked=false,fetchFailed=false;
+  try{const dur=BD.totalM||BD.baseM||360;const r=await fetch(`${API}/availability?date=${BD.dateStr}&duration=${dur}`);if(!r.ok)throw new Error('HTTP '+r.status);const data=await r.json();booked=data.booked||[];dayBlocked=data.dayBlocked||false;}catch(e){console.error('Availability fetch failed:',e);fetchFailed=true;}
   const dur=BD.totalM||BD.baseM||90;
   const isRedDay=SHIFT_RED.has(BD.dateStr);
+  if(fetchFailed){grid.innerHTML='<div class="cal-load" style="grid-column:1/-1;color:#C0392B">Couldn\u2019t load available times \u2014 please refresh the page or call (480) 618-0805 to schedule.</div>';return;}
   if(dayBlocked){grid.innerHTML='<div class="cal-load" style="grid-column:1/-1;color:var(--warm-gray)">This day is unavailable for bookings.</div>';return;}
   grid.innerHTML=ALL_SLOTS.filter(t=>!(isRedDay&&(t==='8:00 AM'||t==='8:30 AM'))).map(t=>{
     const bk=booked.includes(t);const end=addMins(t,dur);
@@ -1039,26 +1041,26 @@ function buildSum(){
   const ds=d?DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear():'—';
   const addonNames=b.addons.map(a=>a.name);if(b.heatSurcharge)addonNames.push('☀️ Afternoon Surcharge (+$50)');const addonsStr=addonNames.length?addonNames.join(', '):'None';
   const saLine=b.sa&&b.sa.name?`<div class="sr"><div class="sk">Seller's Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
-  const baLine=b.ba&&b.ba.name?`<div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${b.ba.name}${b.ba.phone?' · '+b.ba.phone:''}</div></div>`:'';
+  const baLine=b.ba&&b.ba.name?`<div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${esc(b.ba.name)}${b.ba.phone?' · '+esc(b.ba.phone):''}</div></div>`:'';
   let yearNote='';
   if(b.yr<=1959)yearNote=' <small style="color:var(--gold)">(+$80 age surcharge)</small>';
   else if(b.yr>=1960&&b.yr<=1980)yearNote=' <small style="color:var(--gold)">(+$50 age surcharge)</small>';
-  const extraLine=b.extraEmails&&b.extraEmails.length?`<div class="sr"><div class="sk">Extra Recipients</div><div class="sv">${b.extraEmails.join(', ')}</div></div>`:'';
-  const discountLine=b.discount?`<div class="sr"><div class="sk" style="color:#0a6e35">Discount (${b.discount.code})</div><div class="sv" style="color:#0a6e35">−$${b.discount.amount} (${b.discount.pct}% off)</div></div>`:'';
+  const extraLine=b.extraEmails&&b.extraEmails.length?`<div class="sr"><div class="sk">Extra Recipients</div><div class="sv">${esc(b.extraEmails.join(', '))}</div></div>`:'';
+  const discountLine=b.discount?`<div class="sr"><div class="sk" style="color:#0a6e35">Discount (${esc(b.discount.code)})</div><div class="sv" style="color:#0a6e35">−$${b.discount.amount} (${b.discount.pct}% off)</div></div>`:'';
   const finalTotal=b.sqft==='9999'?'$750+':'$'+discountedTotal()+(b.potentialTripCharge?' + $50*':'');
   const sqftDisplay=b.sqftRaw?b.sqftRaw.toLocaleString()+' sq ft':(SQFT_LBL[b.sqft]||b.sqft+' sq ft');
   document.getElementById('sumBox').innerHTML=`
     <h4>Booking Summary</h4>
-    <div class="sr"><div class="sk">Property</div><div class="sv">${b.addr}</div></div>
+    <div class="sr"><div class="sk">Property</div><div class="sv">${esc(b.addr)}</div></div>
     <div class="sr"><div class="sk">Square Footage</div><div class="sv">${sqftDisplay}</div></div>
     <div class="sr"><div class="sk">Year Built</div><div class="sv">${b.yr}${yearNote}</div></div>
-    <div class="sr"><div class="sk">Inspection Type</div><div class="sv">${INSP_LBL[b.type]||b.type}</div></div>
+    <div class="sr"><div class="sk">Inspection Type</div><div class="sv">${INSP_LBL[b.type]||esc(b.type)}</div></div>
     <div class="sr"><div class="sk">Add-Ons</div><div class="sv">${addonsStr}</div></div>
     <div class="sr"><div class="sk">Date</div><div class="sv">${ds}</div></div>
     <div class="sr"><div class="sk">Time</div><div class="sv">${b.time} — approx. ends ${b.endTime}</div></div>
     <div class="sr"><div class="sk">Duration</div><div class="sv">${m2h(b.totalM||b.baseM)}</div></div>
     <div style="height:1px;background:var(--border);margin:8px 0"></div>
-    <div class="sr"><div class="sk">Buyer</div><div class="sv">${b.buyer.firstName||''} ${b.buyer.lastName||''} · ${b.buyer.phone||''}</div></div>
+    <div class="sr"><div class="sk">Buyer</div><div class="sv">${esc(b.buyer.firstName||'')} ${esc(b.buyer.lastName||'')} · ${esc(b.buyer.phone||'')}</div></div>
     ${baLine}${saLine}${extraLine}${discountLine}
     <div class="sum-total"><div class="sk">Estimated Total</div><div class="sv">${finalTotal}</div></div>${b.potentialTripCharge?'<div style="font-size:.75rem;color:var(--warm-gray);margin-top:4px;text-align:right">*Trip charge confirmed by Jaren after booking review</div>':''}`;
 }
@@ -1136,10 +1138,10 @@ async function submitBooking(){
     const d=b.date;
     const ds=DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear();
     document.getElementById('modDetail').innerHTML=`
-      <div class="mr"><div class="mk">Property</div><div class="mv">${b.addr}</div></div>
+      <div class="mr"><div class="mk">Property</div><div class="mv">${esc(b.addr)}</div></div>
       <div class="mr"><div class="mk">Service</div><div class="mv">${INSP_LBL[b.type]}</div></div>
       <div class="mr"><div class="mk">Date & Time</div><div class="mv">${ds} at ${b.time}</div></div>
-      <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${data.confirmationId}</div></div>`;
+      <div class="mr"><div class="mk">Confirmation #</div><div class="mv" style="color:var(--gold)">${esc(data.confirmationId)}</div></div>`;
     document.getElementById('succMod').classList.add('active');
     // Keep button locked on success — prevents accidental duplicate bookings if user closes the modal.
     // Page reload (or new visit) is required to book again.
