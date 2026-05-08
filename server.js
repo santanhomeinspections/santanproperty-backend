@@ -68,6 +68,9 @@ async function initDb() {
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS counter_signed_by TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS counter_signed_pdf_key TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT NULL`);
+    // Round-trip driving miles from OWNER_ADDRESS to inspection address.
+    // Auto-computed at booking time via Distance Matrix; null if the API/env wasn't available.
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS miles NUMERIC(6,2) DEFAULT NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -396,23 +399,27 @@ function parseServiceCity(address) {
   return null;
 }
 
+// Returns { apply, miles, city }:
+//   apply = whether the $50 trip charge applies (only for non-service-city + >=50mi)
+//   miles = one-way driving miles from OWNER_ADDRESS to property (null on API failure or missing config)
+//   city  = matched service city (lowercase) or null
+// Always hits Distance Matrix when GOOGLE_MAPS_API_KEY + OWNER_ADDRESS are set,
+// regardless of service city — we want the actual driving distance for mileage tracking.
 async function checkTripCharge(address) {
-  // Step 1: city check — if explicitly a service city, no charge regardless of distance
   const matchedCity = parseServiceCity(address);
-  if (matchedCity) return { apply: false, miles: 0, city: matchedCity };
 
-  // Step 2: distance check — only if not a service city
-  if (!process.env.GOOGLE_MAPS_API_KEY) {
-    console.warn('Trip charge: missing GOOGLE_MAPS_API_KEY, defaulting to no charge');
-    return { apply: false, miles: 0 };
+  if (!process.env.GOOGLE_MAPS_API_KEY || !process.env.OWNER_ADDRESS) {
+    if (!process.env.GOOGLE_MAPS_API_KEY) console.warn('Trip charge: missing GOOGLE_MAPS_API_KEY');
+    return { apply: false, miles: null, city: matchedCity };
   }
 
+  let oneWayMiles = null;
   try {
     const owner = await getOwnerCoords();
     const originParam = owner
       ? owner.lat + ',' + owner.lng
       : encodeURIComponent(process.env.OWNER_ADDRESS || '');
-    if (!originParam) return { apply: false, miles: 0 };
+    if (!originParam) return { apply: false, miles: null, city: matchedCity };
 
     const url = 'https://maps.googleapis.com/maps/api/distancematrix/json'
       + '?origins=' + originParam
@@ -427,14 +434,20 @@ async function checkTripCharge(address) {
     const data = await r.json();
 
     const elem = data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0];
-    if (!elem || elem.status !== 'OK' || !elem.distance) return { apply: false, miles: 0 };
-
-    const miles = elem.distance.value / 1609.344; // meters → miles
-    if (miles >= TRIP_CHARGE_MILES) return { apply: true, miles: Math.round(miles) };
+    if (elem && elem.status === 'OK' && elem.distance) {
+      oneWayMiles = elem.distance.value / 1609.344; // meters → miles
+    }
   } catch (e) {
     console.warn('Trip charge distance lookup failed:', e.message);
   }
-  return { apply: false, miles: 0 };
+
+  // Trip charge only applies if NOT a service city AND distance >= threshold
+  const apply = !matchedCity && oneWayMiles !== null && oneWayMiles >= TRIP_CHARGE_MILES;
+  return {
+    apply,
+    miles: oneWayMiles !== null ? Math.round(oneWayMiles) : null,
+    city: matchedCity,
+  };
 }
 
 // ── EMAIL ─────────────────────────────────────────────────────
@@ -1196,8 +1209,13 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   const token      = uuidv4();
   const trip       = await checkTripCharge(address);
   const finalPrice = trip.apply ? totalPrice + TRIP_CHARGE_AMT : totalPrice;
+  // Round-trip driving miles for mileage tracking (tax / per-job analysis).
+  // Reuses trip.miles (one-way) so we only hit Distance Matrix once per booking.
+  const miles      = (trip.miles !== null && trip.miles !== undefined)
+    ? Math.round(trip.miles * 2 * 100) / 100
+    : null;
 
-  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, createdAt: Date.now() };
+  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, miles, createdAt: Date.now() };
 
   try {
     await dbSet(token, bookingData);
@@ -1305,8 +1323,8 @@ app.get('/confirm/:token', async function(req, res) {
   // Save to confirmed_bookings — runs regardless of Calendar success/failure
   try {
     await pool.query(
-      'INSERT INTO confirmed_bookings (conf_id, data) VALUES ($1, $2) ON CONFLICT (conf_id) DO NOTHING',
-      [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() })]
+      'INSERT INTO confirmed_bookings (conf_id, data, miles) VALUES ($1, $2, $3) ON CONFLICT (conf_id) DO NOTHING',
+      [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() }), (booking && booking.miles != null) ? booking.miles : null]
     );
     console.log('Confirmed booking saved to DB: ' + confId);
   } catch(e) { console.error('DB confirmed save:', e.message); }
@@ -1926,7 +1944,8 @@ async function load() {
       '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
       '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
       '<div class="stat"><div class="lbl">Unsigned Agreements</div><div class="val" style="color:'+(unsignedCount>0?'#e8a87c':'#1ab464')+'">'+unsignedCount+'</div><div class="sub">pending signature</div></div>' +
-      '<div class="stat"><div class="lbl">Reschedule Requests</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>';
+      '<div class="stat"><div class="lbl">Reschedule Requests</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>' +
+      '<div class="stat"><div class="lbl">Miles This Month</div><div class="val">'+(d.mileage&&d.mileage.monthMiles?Number(d.mileage.monthMiles).toFixed(1):'0')+'</div><div class="sub">YTD '+(d.mileage&&d.mileage.ytdMiles?Number(d.mileage.ytdMiles).toFixed(0):'0')+' &nbsp;<a href="/admin/mileage-csv?from='+(new Date().getFullYear())+'-01-01&to='+(new Date().getFullYear())+'-12-31" style="color:#C9A84C;text-decoration:underline;font-size:.7rem">CSV</a></div></div>';
 
     renderCodes(d.codes || []);
     renderPending(d.pending || []);
@@ -1978,7 +1997,7 @@ async function load() {
           '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
           '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -2613,6 +2632,56 @@ app.get('/admin/csv', adminActionLimiter, async function(req, res) {
   }
 });
 
+// Mileage CSV — date-bounded round-trip miles for tax reporting.
+// Usage: /admin/mileage-csv?from=2026-01-01&to=2026-12-31
+// Header row + per-booking rows + a totals summary row at the bottom.
+app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const from = String(req.query.from || '');
+  const to   = String(req.query.to   || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).send('from and to query params required, format YYYY-MM-DD');
+  }
+  try {
+    const result = await pool.query(
+      `SELECT conf_id, data, miles, confirmed_at
+       FROM confirmed_bookings
+       WHERE cancelled_at IS NULL
+         AND miles IS NOT NULL
+         AND confirmed_at >= $1::date
+         AND confirmed_at <  ($2::date + INTERVAL '1 day')
+       ORDER BY confirmed_at ASC`,
+      [from, to]
+    );
+    const escapeCell = function(v){ return '"' + String(v==null?'':v).replace(/"/g,'""') + '"'; };
+    const lines = ['Date Booked,Inspection Date,Conf #,Buyer,Address,Round-Trip Miles'];
+    let totalMiles = 0;
+    for (const row of result.rows) {
+      const d = row.data || {};
+      const mi = Number(row.miles) || 0;
+      totalMiles += mi;
+      lines.push([
+        escapeCell(new Date(row.confirmed_at).toLocaleDateString('en-US')),
+        escapeCell(d.dateFmt || ''),
+        escapeCell(row.conf_id || ''),
+        escapeCell(d.fullName || ''),
+        escapeCell(d.address || ''),
+        escapeCell(mi.toFixed(2)),
+      ].join(','));
+    }
+    lines.push(',,,,Total,' + escapeCell(totalMiles.toFixed(2)));
+    res.set('Content-Type', 'text/csv');
+    res.set('Content-Disposition', 'attachment; filename="santan_mileage_' + from + '_to_' + to + '.csv"');
+    res.send(lines.join('\n'));
+  } catch(e) {
+    console.error('mileage-csv:', e.message);
+    res.status(500).send('Error generating mileage CSV');
+  }
+});
+
 app.post('/admin/codes/add', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { code, pct } = req.body;
@@ -2648,13 +2717,32 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const [bookings, reschedules, codes, pending] = await Promise.all([
+    const [bookings, reschedules, codes, pending, mileageAgg] = await Promise.all([
       pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
       pool.query("SELECT token, data, created_at FROM pending_bookings WHERE created_at > NOW() - INTERVAL '48 hours' ORDER BY created_at DESC"),
+      // Mileage roll-up — only counts miles on bookings that aren't cancelled.
+      // Uses confirmed_at for the cutoff so the tile reflects when the inspection was booked.
+      pool.query(`
+        SELECT
+          COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('month', NOW())), 0) AS month_miles,
+          COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('year',  NOW())), 0) AS ytd_miles
+        FROM confirmed_bookings
+        WHERE cancelled_at IS NULL
+      `),
     ]);
-    res.json({ bookings: bookings.rows, reschedules: reschedules.rows, codes: codes.rows, pending: pending.rows });
+    const m = mileageAgg.rows[0] || {};
+    res.json({
+      bookings: bookings.rows,
+      reschedules: reschedules.rows,
+      codes: codes.rows,
+      pending: pending.rows,
+      mileage: {
+        monthMiles: Number(m.month_miles) || 0,
+        ytdMiles:   Number(m.ytd_miles)   || 0,
+      },
+    });
   } catch(e) {
     res.status(500).json({ error: 'DB error' });
   }
