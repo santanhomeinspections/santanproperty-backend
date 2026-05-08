@@ -230,7 +230,18 @@ const bookingLimiter = rateLimit({
 });
 const adminAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20, // Admin actions are frequent; this is mainly to slow brute-force on the basic-auth challenge
+  max: 20, // Strict — brute-force defense on the basic-auth 401 challenge.
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many admin requests — wait 15 minutes.',
+});
+// Once authed, admin browsing legitimately hits many endpoints (dashboard load,
+// mark-paid, set-payment, csv export, etc). This is the per-IP cap on those
+// actions — high enough to never block real use, low enough that a credential-
+// stuffer who already cracked the password gets noticed.
+const adminActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many admin requests — wait 15 minutes.',
@@ -428,6 +439,9 @@ async function checkTripCharge(address) {
 
 // ── EMAIL ─────────────────────────────────────────────────────
 async function sendEmail(to, subject, html, attachments) {
+  // Strip CRLF from subject to defang header injection via user-controlled name fields
+  // (e.g. a booker named "Jane\r\nBcc: leak@evil.com" would otherwise inject a Bcc).
+  const safeSubject = String(subject || '').replace(/[\r\n]+/g, ' ').slice(0, 500);
   try {
     const controller = new AbortController();
     // 15s — bumped from 8s because attachments make the request larger
@@ -436,7 +450,7 @@ async function sendEmail(to, subject, html, attachments) {
       from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
       reply_to: 'santanpropertyinspections@gmail.com',
       to: to,
-      subject: subject,
+      subject: safeSubject,
       html: html,
     };
     if (attachments && attachments.length) body.attachments = attachments;
@@ -517,7 +531,7 @@ const AGREEMENT_VERSION = '2026-v2';
 const AGREEMENT_TEXT = `SAN TAN PROPERTY INSPECTIONS
 Certified Home Inspector — BTR #79346
 Jaren Drummond
-823 W Leadwood Ave, San Tan Valley, AZ 85140
+3850 E Gallatin Way, San Tan Valley, AZ 85143
 (480) 618-0805 | santanpropertyinspections@gmail.com | santanpropertyinspections.com
 
 HOME INSPECTION AGREEMENT
@@ -598,11 +612,11 @@ p{color:#666;line-height:1.6;margin-bottom:12px;font-size:.9rem;}
   </div>
   <div class="check">✅</div>
   <h1>Agreement Signed</h1>
-  <p>Thank you, ${buyer.firstName}. Your inspection agreement has been signed and recorded.</p>
+  <p>Thank you, ${escapeHtml((buyer && buyer.firstName) || 'client')}. Your inspection agreement has been signed and recorded.</p>
   <div class="conf">
-    <strong>Confirmation:</strong> ${confId}<br>
-    <strong>Property:</strong> ${address}<br>
-    <strong>Date:</strong> ${dateFmt} @ ${time}
+    <strong>Confirmation:</strong> ${escapeHtml(confId)}<br>
+    <strong>Property:</strong> ${escapeHtml(address)}<br>
+    <strong>Date:</strong> ${escapeHtml(dateFmt)} @ ${escapeHtml(time)}
   </div>
   <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>(480) 618-0805</strong>.</p>
 </div>
@@ -653,20 +667,20 @@ label input{margin-top:3px;flex-shrink:0;width:16px;height:16px;}
     <p class="subtitle">Please review and sign before your inspection</p>
 
     <div class="info-box">
-      <strong>Client:</strong> ${fullName}<br>
-      <strong>Property:</strong> ${address}<br>
-      <strong>Inspection Date:</strong> ${dateFmt} @ ${time}<br>
-      ${addonsDisplay ? '<strong>Add-Ons:</strong> ' + addonsDisplay + '<br>' : ''}
-      <strong>Estimated Total:</strong> $${finalPrice}<br>
-      <strong>Confirmation #:</strong> ${confId}
+      <strong>Client:</strong> ${escapeHtml(fullName)}<br>
+      <strong>Property:</strong> ${escapeHtml(address)}<br>
+      <strong>Inspection Date:</strong> ${escapeHtml(dateFmt)} @ ${escapeHtml(time)}<br>
+      ${addonsDisplay ? '<strong>Add-Ons:</strong> ' + escapeHtml(addonsDisplay) + '<br>' : ''}
+      <strong>Estimated Total:</strong> $${Number(finalPrice)||0}<br>
+      <strong>Confirmation #:</strong> ${escapeHtml(confId)}
     </div>
 
     <div class="section-title">Agreement</div>
     <div class="agreement-box">${AGREEMENT_TEXT}</div>
 
-    ${error ? '<div class="error">' + error + '</div>' : ''}
+    ${error ? '<div class="error">' + escapeHtml(error) + '</div>' : ''}
 
-    <form method="POST" action="/agreement/${token}/sign" id="agreementForm">
+    <form method="POST" action="/agreement/${encodeURIComponent(token)}/sign" id="agreementForm">
       <label>
         <input type="checkbox" id="readCheck" required/>
         I have read and understand the full agreement above
@@ -743,41 +757,41 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
 <div class="header">
   <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
   <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
-  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
 </div>
 
 <h1>HOME INSPECTION AGREEMENT</h1>
 
 <div class="info-grid">
-  <span class="lbl">Client</span><span class="val">${fullName}</span>
-  <span class="lbl">Property</span><span class="val">${address}</span>
-  <span class="lbl">Inspection Date</span><span class="val">${dateFmt} @ ${time}</span>
-  <span class="lbl">Add-On Services</span><span class="val">${addonsLine || 'None'}</span>
-  <span class="lbl">Est. Total</span><span class="val">$${finalPrice}</span>
-  <span class="lbl">Confirmation #</span><span class="val">${confId}</span>
+  <span class="lbl">Client</span><span class="val">${escapeHtml(fullName)}</span>
+  <span class="lbl">Property</span><span class="val">${escapeHtml(address)}</span>
+  <span class="lbl">Inspection Date</span><span class="val">${escapeHtml(dateFmt)} @ ${escapeHtml(time)}</span>
+  <span class="lbl">Add-On Services</span><span class="val">${escapeHtml(addonsLine || 'None')}</span>
+  <span class="lbl">Est. Total</span><span class="val">$${Number(finalPrice)||0}</span>
+  <span class="lbl">Confirmation #</span><span class="val">${escapeHtml(confId)}</span>
 </div>
 
-<div class="agreement-text">${AGREEMENT_TEXT}</div>
+<div class="agreement-text">${escapeHtml(AGREEMENT_TEXT)}</div>
 
 <div class="sig-block">
   <h2>Electronic Signature Record</h2>
   <div class="sig-row">
     <div>
       <div class="lbl">Client Printed Name</div>
-      <div class="val">${fullName}</div>
+      <div class="val">${escapeHtml(fullName)}</div>
     </div>
     <div>
       <div class="lbl">Electronic Signature</div>
-      <div class="val">${signature}</div>
+      <div class="val">${escapeHtml(signature)}</div>
     </div>
     <div>
       <div class="lbl">Date Signed</div>
-      <div class="val">${signedDate} (AZ)</div>
+      <div class="val">${escapeHtml(signedDate)} (AZ)</div>
     </div>
   </div>
   <div class="record">
-    <strong>Signature Record:</strong> This agreement was electronically signed on ${signedDate} (Arizona Time).
-    IP Address: ${ip} &nbsp;|&nbsp; Agreement Version: ${AGREEMENT_VERSION} &nbsp;|&nbsp; Confirmation: ${confId}<br>
+    <strong>Signature Record:</strong> This agreement was electronically signed on ${escapeHtml(signedDate)} (Arizona Time).
+    IP Address: ${escapeHtml(ip)} &nbsp;|&nbsp; Agreement Version: ${escapeHtml(AGREEMENT_VERSION)} &nbsp;|&nbsp; Confirmation: ${escapeHtml(confId)}<br>
     The electronic signature above is legally binding pursuant to the terms of Section 9 of this Agreement.
   </div>
 </div>
@@ -842,21 +856,21 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
   <div class="executed-badge">FULLY EXECUTED</div>
   <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
   <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
-  823 W Leadwood Ave, San Tan Valley, AZ 85140 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
 </div>
 
 <h1>HOME INSPECTION AGREEMENT</h1>
 
 <div class="info-grid">
-  <span class="lbl">Client</span><span class="val">${fullName}</span>
-  <span class="lbl">Property</span><span class="val">${address}</span>
-  <span class="lbl">Inspection Date</span><span class="val">${dateFmt} @ ${time}</span>
-  <span class="lbl">Add-On Services</span><span class="val">${addonsLine || 'None'}</span>
-  <span class="lbl">Est. Total</span><span class="val">$${finalPrice}</span>
-  <span class="lbl">Confirmation #</span><span class="val">${confId}</span>
+  <span class="lbl">Client</span><span class="val">${escapeHtml(fullName)}</span>
+  <span class="lbl">Property</span><span class="val">${escapeHtml(address)}</span>
+  <span class="lbl">Inspection Date</span><span class="val">${escapeHtml(dateFmt)} @ ${escapeHtml(time)}</span>
+  <span class="lbl">Add-On Services</span><span class="val">${escapeHtml(addonsLine || 'None')}</span>
+  <span class="lbl">Est. Total</span><span class="val">$${Number(finalPrice)||0}</span>
+  <span class="lbl">Confirmation #</span><span class="val">${escapeHtml(confId)}</span>
 </div>
 
-<div class="agreement-text">${AGREEMENT_TEXT}</div>
+<div class="agreement-text">${escapeHtml(AGREEMENT_TEXT)}</div>
 
 <div class="sig-block">
   <h2>Signatures of the Parties</h2>
@@ -865,34 +879,34 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
       <h3>Client</h3>
       <div class="row">
         <div class="lbl">Electronic Signature</div>
-        <div class="val">${signature}</div>
+        <div class="val">${escapeHtml(signature)}</div>
       </div>
       <div class="row">
         <div class="lbl">Printed Name</div>
-        <div class="meta">${fullName}</div>
+        <div class="meta">${escapeHtml(fullName)}</div>
       </div>
       <div class="row">
         <div class="lbl">Date Signed</div>
-        <div class="meta">${signedDate} (AZ)</div>
+        <div class="meta">${escapeHtml(signedDate)} (AZ)</div>
       </div>
       <div class="row">
         <div class="lbl">IP Address</div>
-        <div class="meta">${ip}</div>
+        <div class="meta">${escapeHtml(ip)}</div>
       </div>
     </div>
     <div class="party">
       <h3>Inspector (Counter-Signature)</h3>
       <div class="row">
         <div class="lbl">Electronic Signature</div>
-        <div class="val">${counterSignedBy}</div>
+        <div class="val">${escapeHtml(counterSignedBy)}</div>
       </div>
       <div class="row">
         <div class="lbl">Printed Name</div>
-        <div class="meta">${counterSignedBy}</div>
+        <div class="meta">${escapeHtml(counterSignedBy)}</div>
       </div>
       <div class="row">
         <div class="lbl">Date Counter-Signed</div>
-        <div class="meta">${counterSignedDate} (AZ)</div>
+        <div class="meta">${escapeHtml(counterSignedDate)} (AZ)</div>
       </div>
       <div class="row">
         <div class="lbl">License</div>
@@ -902,9 +916,9 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
   </div>
   <div class="record">
     <strong>Execution Record:</strong> This agreement is fully executed.
-    Client electronically signed on ${signedDate}. Inspector counter-signed on ${counterSignedDate}.
+    Client electronically signed on ${escapeHtml(signedDate)}. Inspector counter-signed on ${escapeHtml(counterSignedDate)}.
     Both signatures are legally binding pursuant to the terms of Section 9 of this Agreement.<br>
-    Agreement Version: ${AGREEMENT_VERSION} &nbsp;|&nbsp; Confirmation: ${confId} &nbsp;|&nbsp; Client IP: ${ip}
+    Agreement Version: ${escapeHtml(AGREEMENT_VERSION)} &nbsp;|&nbsp; Confirmation: ${escapeHtml(confId)} &nbsp;|&nbsp; Client IP: ${escapeHtml(ip)}
   </div>
 </div>
 </body>
@@ -1094,9 +1108,9 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
         [discountCode]
       );
       if (codeRow.rows.length) {
-        const pct = Number(codeRow.rows[0].pct) || 0;
+        const pct = Math.max(0, Math.min(100, Number(codeRow.rows[0].pct) || 0));
         discountAmount = Math.round(totalPrice * pct / 100);
-        totalPrice    -= discountAmount;
+        totalPrice    = Math.max(0, totalPrice - discountAmount);
       }
     } catch (e) {
       console.warn('Discount code verify failed:', e.message);
@@ -1170,8 +1184,13 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   const dateFmt    = startDT.toLocaleDateString('en-US',{ weekday:'long', year:'numeric', month:'long', day:'numeric', timeZone: TIMEZONE });
 
   try {
-    const chk = await calendar.events.list({ calendarId: CALENDAR_ID, timeMin: startDT.toISOString(), timeMax: endDT.toISOString(), singleEvents: true });
-    if ((chk.data.items||[]).length) return res.status(409).json({ error:'That slot was just booked — please choose another.' });
+    // Check both the main calendar and the block calendar (manual time-off blocks).
+    const [chk, blockChk] = await Promise.all([
+      calendar.events.list({ calendarId: CALENDAR_ID, timeMin: startDT.toISOString(), timeMax: endDT.toISOString(), singleEvents: true }),
+      calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin: startDT.toISOString(), timeMax: endDT.toISOString(), singleEvents: true }).catch(function(){ return { data: { items: [] } }; }),
+    ]);
+    if ((chk.data.items||[]).length || (blockChk.data.items||[]).length)
+      return res.status(409).json({ error:'That slot was just booked — please choose another.' });
   } catch(e) { console.warn('Slot check failed:', e.message); }
 
   const token      = uuidv4();
@@ -1191,21 +1210,21 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   const confirmUrl = BASE_URL + '/confirm/' + token;
   const cancelUrl  = BASE_URL + '/cancel/'  + token;
 
-  const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + '<br>Phone: ' + (sellerAgent.phone||'—') + '</p>' : '';
-  const tripLineOwner      = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + trip.miles + ' miles)</p>' : '';
-  const notesLineOwner     = notes ? '<p><b>Notes:</b> ' + notes + '</p>' : '';
-  const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + extraEmails.join(', ') + '</p>' : '';
-  const discountLineOwner  = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')</p>' : '';
+  const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + escapeHtml(sellerAgent.name) + (sellerAgent.brokerage ? ' — ' + escapeHtml(sellerAgent.brokerage) : '') + '<br>Phone: ' + escapeHtml(sellerAgent.phone||'—') + '</p>' : '';
+  const tripLineOwner      = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + Number(trip.miles||0) + ' miles)</p>' : '';
+  const notesLineOwner     = notes ? '<p><b>Notes:</b> ' + escapeHtml(notes) + '</p>' : '';
+  const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + escapeHtml(extraEmails.join(', ')) + '</p>' : '';
+  const discountLineOwner  = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + escapeHtml(discountCode) + ' (' + (Number(discountPct)||0) + '% off — −$' + (Number(discountAmount)||0) + ')</p>' : '';
 
   const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:560px">'
-    + '<h2>New Booking Request — ' + confId + '</h2>'
-    + '<p><b>Service:</b> ' + svcLabel + '<br><b>Add-ons:</b> ' + addonsLine + '</p>'
-    + '<p><b>Date/Time:</b> ' + dateFmt + ' @ ' + time + (endTime ? ' to ' + endTime : '') + '</p>'
-    + '<p><b>Address:</b> ' + address + '<br><b>Sq Ft:</b> ' + sqft + ' / <b>Year:</b> ' + yearBuilt + '</p>'
-    + '<p><b>Est. Total:</b> $' + finalPrice + (trip.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '') + '</p>'
+    + '<h2>New Booking Request — ' + escapeHtml(confId) + '</h2>'
+    + '<p><b>Service:</b> ' + escapeHtml(svcLabel) + '<br><b>Add-ons:</b> ' + escapeHtml(addonsLine) + '</p>'
+    + '<p><b>Date/Time:</b> ' + escapeHtml(dateFmt) + ' @ ' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</p>'
+    + '<p><b>Address:</b> ' + escapeHtml(address) + '<br><b>Sq Ft:</b> ' + escapeHtml(String(sqft)) + ' / <b>Year:</b> ' + escapeHtml(String(yearBuilt||'')) + '</p>'
+    + '<p><b>Est. Total:</b> $' + (Number(finalPrice)||0) + (trip.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '') + '</p>'
     + '<hr/>'
-    + '<p><b>Buyer:</b> ' + fullName + '<br>Phone: ' + buyer.phone + '<br>Email: ' + buyer.email + '</p>'
-    + (hasBA ? '<p><b>Buyer Agent:</b> ' + baName + (baBrok ? ' — ' + baBrok : '') + (baPhone ? '<br>Phone: ' + baPhone : '') + (baEmail ? '<br>Email: ' + baEmail : '') + '</p>' : '<p><b>Buyer Agent:</b> <i>None provided</i></p>')
+    + '<p><b>Buyer:</b> ' + escapeHtml(fullName) + '<br>Phone: ' + escapeHtml(buyer.phone) + '<br>Email: ' + escapeHtml(buyer.email) + '</p>'
+    + (hasBA ? '<p><b>Buyer Agent:</b> ' + escapeHtml(baName) + (baBrok ? ' — ' + escapeHtml(baBrok) : '') + (baPhone ? '<br>Phone: ' + escapeHtml(baPhone) : '') + (baEmail ? '<br>Email: ' + escapeHtml(baEmail) : '') + '</p>' : '<p><b>Buyer Agent:</b> <i>None provided</i></p>')
     + sellerLineOwner + notesLineOwner + extraEmailsLineOwner + discountLineOwner + tripLineOwner
     + '<div style="margin:28px 0">'
     + '<a href="' + confirmUrl + '" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CONFIRM AND SEND TEXTS</a>'
@@ -1330,14 +1349,14 @@ app.get('/confirm/:token', async function(req, res) {
   // Buyer confirmation email — includes agreement link
   const buyerHtml = emailWrap(
     '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
-    + '<p>Hi ' + buyer.firstName + ', here are your booking details:</p>'
+    + '<p>Hi ' + escapeHtml(buyer.firstName) + ', here are your booking details:</p>'
     + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
-    + '<tr><td style="padding:6px 0;color:#888;width:130px">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'
-    + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'
-    + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
-    + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'
-    + '<tr><td style="padding:6px 0;color:#888">Est. Total</td><td style="color:#C9A84C;font-weight:700">$' + finalPrice + tripLineBuyer + '</td></tr>'
-    + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888;width:130px">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + (addons.length ? ' + ' + escapeHtml(addonsLine) : '') + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(address) + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Est. Total</td><td style="color:#C9A84C;font-weight:700">$' + (Number(finalPrice)||0) + escapeHtml(tripLineBuyer) + '</td></tr>'
+    + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
     + '</table>'
     + '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>'
     + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
@@ -1371,12 +1390,12 @@ app.get('/confirm/:token', async function(req, res) {
       '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
       + '<p>You have been added as a report recipient for the following inspection:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
-      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(fullName) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + (addons.length ? ' + ' + escapeHtml(addonsLine) : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(address) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
       + '</table>'
       + '<p>The inspection report will be delivered the <strong>same day</strong> as the inspection.</p>'
       + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
@@ -1392,15 +1411,15 @@ app.get('/confirm/:token', async function(req, res) {
   if (baEmail) {
     const baHtml = emailWrap(
       '<h2 style="color:#0F1C35">Inspection Confirmed for Your Buyer</h2>'
-      + '<p>Hi ' + (baName || 'there') + ',</p>'
+      + '<p>Hi ' + escapeHtml(baName || 'there') + ',</p>'
       + '<p>The inspection for your buyer has been confirmed. Details below:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
-      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + fullName + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + (addons.length ? ' + ' + addonsLine : '') + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + confId + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(fullName) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(address) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + (addons.length ? ' + ' + escapeHtml(addonsLine) : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
       + '</table>'
       + '<p>Please confirm the seller\'s agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
       + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
@@ -1414,13 +1433,13 @@ app.get('/confirm/:token', async function(req, res) {
   if (sellerAgent && sellerAgent.email) {
     const sellerHtml = emailWrap(
       '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'
-      + '<p>Hi ' + (sellerAgent.name || 'there') + ',</p>'
+      + '<p>Hi ' + escapeHtml(sellerAgent.name || 'there') + ',</p>'
       + '<p>A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:</p>'
       + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
-      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + address + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + dateFmt + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + time + (endTime ? ' to ' + endTime : '') + '</td></tr>'
-      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + svcLabel + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(address) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + '</td></tr>'
       + '</table>'
       + '<ul style="margin:12px 0 12px 20px"><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
       + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0"><p style="margin:0;font-size:.92rem"><strong style="color:#1B2D52">Important:</strong> Please send the <strong>CBS code</strong> so I can access the home, and reply to confirm the inspection.</p></div>'
@@ -1433,8 +1452,8 @@ app.get('/confirm/:token', async function(req, res) {
   }
 
   // Owner confirmation page
-  const tripConfirmLine = tripCharge.apply ? '<tr><td style="padding:6px 0;color:#888;width:130px">Trip Charge</td><td style="color:#C9A84C;font-weight:600">+$' + TRIP_CHARGE_AMT + ' (' + tripCharge.miles + ' miles)</td></tr>' : '';
-  const discountConfirmLine = discountCode ? '<tr><td style="padding:6px 0;color:#888">Discount</td><td style="color:#1ab464;font-weight:600">' + discountCode + ' (-$' + discountAmount + ')</td></tr>' : '';
+  const tripConfirmLine = tripCharge.apply ? '<tr><td style="padding:6px 0;color:#888;width:130px">Trip Charge</td><td style="color:#C9A84C;font-weight:600">+$' + TRIP_CHARGE_AMT + ' (' + (Number(tripCharge.miles)||0) + ' miles)</td></tr>' : '';
+  const discountConfirmLine = discountCode ? '<tr><td style="padding:6px 0;color:#888">Discount</td><td style="color:#1ab464;font-weight:600">' + escapeHtml(discountCode) + ' (-$' + (Number(discountAmount)||0) + ')</td></tr>' : '';
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1478,22 +1497,22 @@ td:last-child{color:#2C2C2C;font-weight:600;}
   <div class="check">&#10003;</div>
   <h1>Booking Confirmed!</h1>
   <p class="sub">Confirmation texts and emails have been sent to the buyer and agents.</p>
-  <div class="conf-badge">Confirmation # ${confId}</div>
+  <div class="conf-badge">Confirmation # ${escapeHtml(confId)}</div>
   <table>
-    <tr><td>Buyer</td><td>${fullName}</td></tr>
-    <tr><td>Property</td><td>${address}</td></tr>
-    <tr><td>Service</td><td>${svcLabel}${addons.length ? ' + ' + addonsLine : ''}</td></tr>
-    <tr><td>Date</td><td>${dateFmt}</td></tr>
-    <tr><td>Time</td><td>${time}${endTime ? ' to ' + endTime : ''}</td></tr>
+    <tr><td>Buyer</td><td>${escapeHtml(fullName)}</td></tr>
+    <tr><td>Property</td><td>${escapeHtml(address)}</td></tr>
+    <tr><td>Service</td><td>${escapeHtml(svcLabel)}${addons.length ? ' + ' + escapeHtml(addonsLine) : ''}</td></tr>
+    <tr><td>Date</td><td>${escapeHtml(dateFmt)}</td></tr>
+    <tr><td>Time</td><td>${escapeHtml(time)}${endTime ? ' to ' + escapeHtml(endTime) : ''}</td></tr>
     ${tripConfirmLine}${discountConfirmLine}
-    <tr class="total-row"><td>Total</td><td>$${finalPrice}</td></tr>
+    <tr class="total-row"><td>Total</td><td>$${Number(finalPrice)||0}</td></tr>
   </table>
   <div class="agree-notice">
     <strong>Agreement link sent to buyer.</strong> The report will be locked until the agreement is signed. You can check signature status in the admin dashboard.
   </div>
   <div class="notice">
-    <strong>Texts sent to:</strong> ${fullName}${baPhone ? ' &middot; ' + baName : ''}${sellerAgent && sellerAgent.name ? ' &middot; ' + sellerAgent.name : ''}<br>
-    <strong>Emails sent to:</strong> ${buyer.email}${baEmail ? ' &middot; ' + baEmail : ''}
+    <strong>Texts sent to:</strong> ${escapeHtml(fullName)}${baPhone ? ' &middot; ' + escapeHtml(baName) : ''}${sellerAgent && sellerAgent.name ? ' &middot; ' + escapeHtml(sellerAgent.name) : ''}<br>
+    <strong>Emails sent to:</strong> ${escapeHtml(buyer.email)}${baEmail ? ' &middot; ' + escapeHtml(baEmail) : ''}
   </div>
   <div class="footer">
     <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 618-0805 &nbsp;&middot;&nbsp; BTR #79346
@@ -1598,13 +1617,13 @@ app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
       const signedDate = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short' });
       const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
         + '<h2 style="color:#1B2D52">Agreement Signed</h2>'
-        + '<p><b>' + booking.fullName + '</b> has signed the inspection agreement.</p>'
-        + '<p><b>Conf #:</b> ' + booking.confId + '<br>'
-        + '<b>Property:</b> ' + booking.address + '<br>'
-        + '<b>Inspection:</b> ' + booking.dateFmt + ' @ ' + booking.time + '<br>'
-        + '<b>Signed:</b> ' + signedDate + ' (AZ)<br>'
-        + '<b>Signature:</b> ' + signature + '<br>'
-        + '<b>IP:</b> ' + ip + '</p>'
+        + '<p><b>' + escapeHtml(booking.fullName) + '</b> has signed the inspection agreement.</p>'
+        + '<p><b>Conf #:</b> ' + escapeHtml(booking.confId) + '<br>'
+        + '<b>Property:</b> ' + escapeHtml(booking.address) + '<br>'
+        + '<b>Inspection:</b> ' + escapeHtml(booking.dateFmt) + ' @ ' + escapeHtml(booking.time) + '<br>'
+        + '<b>Signed:</b> ' + escapeHtml(signedDate) + ' (AZ)<br>'
+        + '<b>Signature:</b> ' + escapeHtml(signature) + '<br>'
+        + '<b>IP:</b> ' + escapeHtml(ip) + '</p>'
         + '</div>';
       await sendEmail(process.env.OWNER_EMAIL, 'AGREEMENT SIGNED: ' + booking.fullName + ' [' + booking.confId + ']', ownerHtml);
     } catch(e) { console.error('Owner agreement notification email:', e.message); }
@@ -1613,11 +1632,11 @@ app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
     try {
       const clientHtml = emailWrap(
         '<h2 style="color:#0F1C35">Agreement Signed</h2>'
-        + '<p>Hi ' + booking.buyer.firstName + ', this confirms that you have signed the inspection agreement for:</p>'
+        + '<p>Hi ' + escapeHtml((booking.buyer && booking.buyer.firstName) || 'there') + ', this confirms that you have signed the inspection agreement for:</p>'
         + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
-        + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + booking.address + '</td></tr>'
-        + '<tr><td style="padding:6px 0;color:#888">Inspection Date</td><td style="color:#2C2C2C;font-weight:600">' + booking.dateFmt + ' @ ' + booking.time + '</td></tr>'
-        + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + booking.confId + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(booking.address) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Inspection Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(booking.dateFmt) + ' @ ' + escapeHtml(booking.time) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(booking.confId) + '</td></tr>'
         + '</table>'
         + '<p>Your agreement has been recorded. You are all set for your inspection.</p>'
         + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
@@ -1702,12 +1721,12 @@ app.post('/api/contact', rescheduleLimiter, async function(req, res) {
 
   const html = '<div style="font-family:Arial,sans-serif;max-width:520px">'
     + '<h2 style="color:#1B2D52">New Contact Form Submission</h2>'
-    + '<p><b>Name:</b> ' + name + '</p>'
-    + '<p><b>Role:</b> ' + roleLabel + '</p>'
-    + (phone ? '<p><b>Phone:</b> ' + phone + '</p>' : '')
-    + '<p><b>Email:</b> ' + email + '</p>'
-    + '<p><b>Message:</b></p><p style="background:#FAF7F0;padding:12px;border-radius:6px;border-left:4px solid #C9A84C">' + message + '</p>'
-    + '<p style="color:#888;font-size:.85rem;margin-top:16px">Reply directly to this email to respond to ' + name + '.</p>'
+    + '<p><b>Name:</b> ' + escapeHtml(name) + '</p>'
+    + '<p><b>Role:</b> ' + escapeHtml(roleLabel) + '</p>'
+    + (phone ? '<p><b>Phone:</b> ' + escapeHtml(phone) + '</p>' : '')
+    + '<p><b>Email:</b> ' + escapeHtml(email) + '</p>'
+    + '<p><b>Message:</b></p><p style="background:#FAF7F0;padding:12px;border-radius:6px;border-left:4px solid #C9A84C">' + escapeHtml(message) + '</p>'
+    + '<p style="color:#888;font-size:.85rem;margin-top:16px">Reply directly to this email to respond to ' + escapeHtml(name) + '.</p>'
     + '</div>';
 
   try {
@@ -1743,11 +1762,11 @@ app.post('/api/reschedule', rescheduleLimiter, async function(req, res) {
 
   const rHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
     + '<h2 style="color:#1B2D52">Reschedule Request</h2>'
-    + '<p><b>From:</b> ' + name + '</p>'
-    + (confId ? '<p><b>Conf #:</b> ' + confId + '</p>' : '')
-    + (phone ? '<p><b>Phone:</b> ' + phone + '</p>' : '')
-    + '<p><b>Email:</b> ' + email + '</p>'
-    + (message ? '<p><b>Message:</b> ' + message + '</p>' : '')
+    + '<p><b>From:</b> ' + escapeHtml(name) + '</p>'
+    + (confId ? '<p><b>Conf #:</b> ' + escapeHtml(confId) + '</p>' : '')
+    + (phone ? '<p><b>Phone:</b> ' + escapeHtml(phone) + '</p>' : '')
+    + '<p><b>Email:</b> ' + escapeHtml(email) + '</p>'
+    + (message ? '<p><b>Message:</b> ' + escapeHtml(message) + '</p>' : '')
     + '</div>';
 
   try {
@@ -1769,7 +1788,12 @@ if (!process.env.ADMIN_PASSWORD) {
 function checkAdmin(req) {
   const auth = req.headers['authorization'];
   const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  return pass === ADMIN_PASSWORD;
+  if (pass == null) return false;
+  // Constant-time comparison so password length / prefix can't be timing-attacked.
+  const a = Buffer.from(pass);
+  const b = Buffer.from(ADMIN_PASSWORD);
+  if (a.length !== b.length) return false;
+  try { return require('crypto').timingSafeEqual(a, b); } catch (_) { return false; }
 }
 
 app.get('/admin', adminAuthLimiter, function(req, res) {
@@ -2258,7 +2282,7 @@ setInterval(load, 60000);
 });
 
 // ── ADMIN API ROUTES ──────────────────────────────────────────
-app.post('/admin/cancel-booking', async function(req, res) {
+app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
@@ -2319,7 +2343,7 @@ app.post('/admin/cancel-booking', async function(req, res) {
   res.json({ success: true });
 });
 
-app.post('/admin/mark-paid', async function(req, res) {
+app.post('/admin/mark-paid', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
@@ -2329,7 +2353,7 @@ app.post('/admin/mark-paid', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/admin/mark-unpaid', async function(req, res) {
+app.post('/admin/mark-unpaid', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   try {
@@ -2339,7 +2363,7 @@ app.post('/admin/mark-unpaid', async function(req, res) {
 });
 
 // Set payment method + auto-mark paid (or unpaid if method blank)
-app.post('/admin/set-payment', async function(req, res) {
+app.post('/admin/set-payment', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId, method } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
@@ -2364,7 +2388,7 @@ app.post('/admin/set-payment', async function(req, res) {
 });
 
 // Permanently delete a booking from the DB (use for test bookings only)
-app.post('/admin/hard-delete-booking', async function(req, res) {
+app.post('/admin/hard-delete-booking', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
@@ -2382,7 +2406,7 @@ app.post('/admin/hard-delete-booking', async function(req, res) {
 });
 
 // Stream signed agreement PDF from R2 to admin browser
-app.get('/admin/agreement-pdf/:confId', async function(req, res) {
+app.get('/admin/agreement-pdf/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
@@ -2404,7 +2428,7 @@ app.get('/admin/agreement-pdf/:confId', async function(req, res) {
 });
 
 // Stream the fully-executed (counter-signed) agreement PDF to admin browser.
-app.get('/admin/executed-pdf/:confId', async function(req, res) {
+app.get('/admin/executed-pdf/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
@@ -2427,7 +2451,7 @@ app.get('/admin/executed-pdf/:confId', async function(req, res) {
 
 // Counter-sign a previously-signed agreement.
 // Generates a new fully-executed PDF, uploads to R2, and emails it to client + owner.
-app.post('/admin/counter-sign', async function(req, res) {
+app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
@@ -2541,7 +2565,7 @@ app.post('/admin/counter-sign', async function(req, res) {
   }
 });
 
-app.get('/admin/csv', async function(req, res) {
+app.get('/admin/csv', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
@@ -2589,7 +2613,7 @@ app.get('/admin/csv', async function(req, res) {
   }
 });
 
-app.post('/admin/codes/add', async function(req, res) {
+app.post('/admin/codes/add', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { code, pct } = req.body;
   if (!code || !pct || isNaN(pct) || pct < 1 || pct > 100) return res.status(400).json({ error: 'Invalid code or percentage' });
@@ -2599,7 +2623,7 @@ app.post('/admin/codes/add', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/admin/codes/delete', async function(req, res) {
+app.post('/admin/codes/delete', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { code } = req.body;
   try {
@@ -2618,7 +2642,7 @@ app.get('/api/validate-code', async function(req, res) {
   } catch(e) { return res.json({ valid: false }); }
 });
 
-app.get('/admin/data', async function(req, res) {
+app.get('/admin/data', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).json({ error: 'Unauthorized' });
@@ -2637,7 +2661,7 @@ app.get('/admin/data', async function(req, res) {
 });
 
 // Delete a single pending booking (frees its slot immediately)
-app.post('/admin/delete-pending', async function(req, res) {
+app.post('/admin/delete-pending', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'No token' });
@@ -2648,7 +2672,7 @@ app.post('/admin/delete-pending', async function(req, res) {
 });
 
 // Clear ALL pending bookings — for cleaning up after testing
-app.post('/admin/clear-all-pending', async function(req, res) {
+app.post('/admin/clear-all-pending', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const r = await pool.query('DELETE FROM pending_bookings RETURNING token');
