@@ -85,6 +85,34 @@ section{padding:80px 24px;}
 .wc h3{font-family:'Playfair Display',serif;font-size:1.05rem;color:var(--navy-dark);margin-bottom:7px;}
 .wc p{font-size:.83rem;color:var(--warm-gray);line-height:1.6;}
 
+/* About section — meet the inspector */
+#about{background:var(--white);}
+.about-grid{display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:start;margin-top:38px;}
+.about-photo{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 18px 50px rgba(15,28,53,.18);}
+.about-photo img{display:block;width:100%;height:auto;}
+.about-photo-cap{font-family:'Playfair Display',serif;font-style:italic;color:var(--warm-gray);font-size:.85rem;text-align:center;margin-top:14px;letter-spacing:.3px;}
+.about-body p{font-size:1rem;color:var(--text);line-height:1.85;margin-bottom:18px;}
+.about-body p:first-of-type{font-size:1.05rem;color:var(--navy-dark);font-weight:500;}
+.about-creds{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0 26px;}
+.about-creds span{background:rgba(201,168,76,.13);border:1px solid rgba(201,168,76,.35);color:var(--navy-dark);font-size:.78rem;font-weight:600;padding:7px 14px;border-radius:20px;letter-spacing:.3px;}
+.about-ctas{display:flex;gap:12px;flex-wrap:wrap;}
+.about-ctas .btn-sample{background:var(--navy-dark);color:var(--white);font-weight:600;font-size:.88rem;padding:12px 22px;border-radius:6px;text-decoration:none;border:2px solid var(--navy-dark);transition:all .2s;display:inline-flex;align-items:center;gap:8px;}
+.about-ctas .btn-sample:hover{background:var(--navy);border-color:var(--navy);}
+.about-ctas .btn-reviews{background:transparent;color:var(--navy-dark);font-weight:600;font-size:.88rem;padding:12px 22px;border-radius:6px;text-decoration:none;border:2px solid var(--border);transition:all .2s;display:inline-flex;align-items:center;gap:8px;}
+.about-ctas .btn-reviews:hover{border-color:var(--gold);color:var(--gold);}
+
+/* Reviews / Google Business Profile callout */
+#reviews{background:var(--cream);}
+.reviews-card{background:var(--white);border:1px solid var(--border);border-radius:14px;padding:46px 32px;text-align:center;max-width:720px;margin:32px auto 0;box-shadow:0 10px 30px rgba(27,45,82,.05);}
+.reviews-stars{font-size:1.8rem;color:var(--gold);letter-spacing:4px;margin-bottom:14px;line-height:1;}
+.reviews-card h3{font-family:'Playfair Display',serif;font-size:1.4rem;color:var(--navy-dark);margin-bottom:10px;}
+.reviews-card p{font-size:.92rem;color:var(--warm-gray);line-height:1.7;margin-bottom:24px;max-width:480px;margin-left:auto;margin-right:auto;}
+.reviews-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;}
+.btn-review-write{background:var(--gold);color:var(--navy-dark);font-weight:700;font-size:.9rem;padding:12px 24px;border-radius:6px;text-decoration:none;border:2px solid var(--gold);transition:all .2s;}
+.btn-review-write:hover{background:var(--gold-light);border-color:var(--gold-light);}
+.btn-review-read{background:transparent;color:var(--navy-dark);font-weight:600;font-size:.9rem;padding:12px 24px;border-radius:6px;text-decoration:none;border:2px solid var(--border);transition:all .2s;}
+.btn-review-read:hover{border-color:var(--navy-dark);}
+
 #booking{background:linear-gradient(135deg,var(--navy-dark) 0%,var(--navy) 100%);position:relative;overflow:hidden;}
 #booking::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23C9A84C' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");}
 #booking .stitle{color:var(--white);}
@@ -249,6 +277,8 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   .hamburger{display:flex;}
   .pay-layout,.footer-grid{grid-template-columns:1fr;}
   .why-grid{grid-template-columns:repeat(2,1fr);}
+  .about-grid{grid-template-columns:1fr;gap:32px;}
+  .about-photo{max-width:300px;margin:0 auto;}
   .fr2{grid-template-columns:1fr;}
   .tgrid{grid-template-columns:repeat(2,1fr);}
   .wiz-body{padding:22px 18px;}
@@ -314,6 +344,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
   <a href="#" class="nav-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 175" height="44" style="width:auto"><polygon points="10,135 70,55 130,135" fill="#C9A84C"/><polygon points="170,135 230,55 290,135" fill="#C9A84C"/><polygon points="80,135 150,22 220,135" fill="#B8962A"/><polygon points="140,22 150,22 160,40 130,40" fill="#F0ECD8" opacity="0.85"/><polygon points="63,55 70,55 77,67 56,67" fill="#F0ECD8" opacity="0.85"/><polygon points="223,55 230,55 237,67 216,67" fill="#F0ECD8" opacity="0.85"/><rect x="128" y="82" width="44" height="36" fill="#1B2D52"/><polygon points="120,84 150,62 180,84" fill="#1B2D52"/><rect x="143" y="100" width="14" height="18" fill="#C9A84C"/><rect x="131" y="87" width="10" height="9" fill="#C9A84C" opacity="0.7"/><rect x="159" y="87" width="10" height="9" fill="#C9A84C" opacity="0.7"/><text x="150" y="155" text-anchor="middle" font-family="Georgia,serif" font-weight="700" font-size="19" fill="#C9A84C" letter-spacing="2">SAN TAN PROPERTY</text><text x="150" y="170" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#E8C97A" letter-spacing="4">INSPECTIONS</text></svg></a>
   <ul class="nav-links" id="navLinks">
     <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#about">About</a></li>
     <li><a href="#what-to-expect">How It Works</a></li>
     <li><a href="#contact">Contact</a></li>
     <li><a href="#booking" class="nav-cta">Book Now</a></li>
@@ -332,6 +363,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <a href="#booking" class="btn-p">Book Online — Instant Availability</a>
     <a href="#pricing" class="btn-o">See Pricing</a>
   </div>
+  <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener" style="display:inline-block;margin-top:22px;color:#BEC8D8;font-size:.85rem;text-decoration:none;border-bottom:1px dashed rgba(190,200,216,.4);padding-bottom:2px;transition:color .2s,border-color .2s" onmouseover="this.style.color='#C9A84C';this.style.borderColor='#C9A84C'" onmouseout="this.style.color='#BEC8D8';this.style.borderColor='rgba(190,200,216,.4)'">📄 See a Sample Report (PDF)</a>
 </section>
 
 <div class="trust-bar">
@@ -383,6 +415,34 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <div class="wc"><span class="wi">📞</span><h3>Always Reachable</h3><p>Have questions before or after your inspection? Call or text Jaren directly — no call centers, no runaround.</p></div>
       <div class="wc"><span class="wi">🤝</span><h3>We Work For You</h3><p>Our only job is giving you the full, honest truth about the home. No conflicts of interest — ever.</p></div>
       <div class="wc"><span class="wi">📅</span><h3>Easy Online Booking</h3><p>Step-by-step booking with live calendar availability. No phone tag needed.</p></div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider"/>
+<section id="about">
+  <div class="container">
+    <div style="text-align:center"><div class="slabel">Meet the Inspector</div><h2 class="stitle">Hi, I'm Jaren</h2></div>
+    <div class="about-grid">
+      <div>
+        <div class="about-photo">
+          <img src="/jaren-family.jpg" alt="The Drummond family" loading="lazy"/>
+        </div>
+        <div class="about-photo-cap">The Drummond family</div>
+      </div>
+      <div class="about-body">
+        <p>I'm an Arizona-certified home inspector based in San Tan Valley with my wife and two daughters.</p>
+        <p>Every inspection comes with a same-day digital report, photos on every finding, and a direct line to me if you have questions. Clear communication, no jargon, friendly start to finish.</p>
+        <div class="about-creds">
+          <span>AZ BTR #79346</span>
+          <span>Certified &amp; Insured</span>
+          <span>Same-Day Reports</span>
+        </div>
+        <div class="about-ctas">
+          <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener" class="btn-sample">📄 See a Sample Report</a>
+          <a href="#reviews" class="btn-reviews">★ Google Reviews</a>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -464,6 +524,22 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       </div>
     </div>
     <div style="text-align:center"><p style="font-size:.85rem;color:var(--warm-gray)">Not sure if we cover your area? Call or text Jaren at <a href="tel:+14806180805" style="color:var(--gold);font-weight:700">(480) 618-0805</a></p></div>
+  </div>
+</section>
+
+<hr class="section-divider"/>
+<section id="reviews">
+  <div class="container">
+    <div style="text-align:center"><div class="slabel">Reviews</div><h2 class="stitle">Find Us on Google</h2></div>
+    <div class="reviews-card">
+      <div class="reviews-stars" aria-hidden="true">★ ★ ★ ★ ★</div>
+      <h3>Worked with us recently?</h3>
+      <p>Reviews from buyers and agents help other families make a confident decision. If we earned it, we'd be grateful for a minute of your time.</p>
+      <div class="reviews-btns">
+        <a href="https://g.page/r/CQcLkYjI6dqDEBM/review" target="_blank" rel="noopener" class="btn-review-write">Leave a Google Review</a>
+        <a href="https://www.google.com/search?q=san+tan+property+inspections+san+tan+valley" target="_blank" rel="noopener" class="btn-review-read">Read Reviews</a>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -748,6 +824,8 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <a href="#pricing">Warranty Inspection</a>
       <a href="#pricing">Termite / WDO</a>
       <a href="#pricing">Pool &amp; Spa</a>
+      <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener">📄 Sample Report (PDF)</a>
+      <a href="#reviews">★ Google Reviews</a>
     </div>
     <div class="fc">
       <h4>Contact</h4>
@@ -1291,6 +1369,9 @@ window.addEventListener("load",checkHash);
   "email": "santanpropertyinspections@gmail.com",
   "priceRange": "$$",
   "image": "https://santanpropertyinspections.com/logo-gold.jpg",
+  "sameAs": [
+    "https://g.page/r/CQcLkYjI6dqDEBM"
+  ],
   "address": {
     "@type": "PostalAddress",
     "addressLocality": "Gilbert",
