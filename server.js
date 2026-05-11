@@ -806,6 +806,285 @@ document.getElementById('agreementForm').addEventListener('submit', function(e) 
 </html>`;
 }
 
+// ── CUSTOMER HUB PAGE ─────────────────────────────────────────
+// Single-page status hub for the client. Adapts to where the booking sits in
+// its lifecycle (confirmed/signed/inspected/delivered/cancelled) and surfaces
+// the right next-step CTA. Used for the /i/:token route.
+//
+// `row` is the raw confirmed_bookings row (paid_at, agreement_signed_at, etc.).
+// `booking` is row.data (the JSONB payload — confId, dateFmt, address, etc.).
+// `reportState` is one of: 'none' | 'pending' | 'completed' | 'delivered'.
+// `hubToken` is the agreement token (also used as the hub token).
+function buildHubPage(booking, row, reportState, hubToken) {
+  const { confId, address, dateFmt, time, endTime, svcLabel, addonsLine, finalPrice, fullName, buyer } = booking;
+  const buyerFirst = (buyer && buyer.firstName) || (fullName ? String(fullName).split(' ')[0] : 'there');
+
+  const isCancelled    = !!(row && row.cancelled_at);
+  const isSigned       = !!(row && row.agreement_signed_at);
+  const isCounterSigned= !!(row && row.counter_signed_at);
+  const isPaid         = !!(row && row.paid_at);
+
+  // Compute "inspection has happened yet?" — we anchor on the END of the slot
+  // so the hub doesn't flip to "completed" mid-inspection.
+  let inspectionPast = false;
+  try {
+    if (booking.date && booking.time) {
+      const sm = slotToMins(booking.time);
+      const slotH = Math.floor(sm/60), slotM = sm%60;
+      const startDT = new Date(`${booking.date}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
+      const endDT   = new Date(startDT.getTime() + (Number(booking.totalMins)||120)*60000);
+      inspectionPast = Date.now() > endDT.getTime();
+    }
+  } catch(_) {}
+
+  const agreementUrl = '/agreement/' + encodeURIComponent(hubToken) + '?s=' + encodeURIComponent(signToken(hubToken));
+
+  // ── Build the status banner ────────────────────────────────
+  // One-line state summary. Color-coded. This is the first thing the customer sees.
+  let banner = '';
+  if (isCancelled) {
+    banner = '<div class="banner banner-bad"><strong>This inspection has been cancelled.</strong> Contact us at (480) 618-0805 if you have questions.</div>';
+  } else if (reportState === 'delivered') {
+    banner = '<div class="banner banner-good"><strong>Your report has been delivered.</strong> Check your email — see the Report section below if you can\'t find it.</div>';
+  } else if (inspectionPast && reportState === 'completed') {
+    banner = '<div class="banner banner-info"><strong>Your inspection is complete.</strong> The report will be delivered to your email shortly.</div>';
+  } else if (inspectionPast) {
+    banner = '<div class="banner banner-info"><strong>Your inspection has been completed.</strong> Your report will be delivered to your email by end of day.</div>';
+  } else if (!isSigned) {
+    banner = '<div class="banner banner-action"><strong>Action needed:</strong> Please review and sign your inspection agreement before your appointment.</div>';
+  } else {
+    banner = '<div class="banner banner-good"><strong>You are all set.</strong> We look forward to seeing you on inspection day.</div>';
+  }
+
+  // ── Agreement section ──────────────────────────────────────
+  let agreementSection = '';
+  if (isCancelled) {
+    agreementSection = '';
+  } else if (isSigned) {
+    const signedDate = row.agreement_signed_at
+      ? new Date(row.agreement_signed_at).toLocaleString('en-US', { timeZone: TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })
+      : '';
+    agreementSection = '<div class="section">'
+      + '<h2>Agreement</h2>'
+      + '<p class="muted">Signed ' + escapeHtml(signedDate) + ' (AZ)' + (isCounterSigned ? ' &middot; fully executed' : '') + '</p>'
+      + '<div class="status-pill status-good">✓ Signed</div>'
+      + '</div>';
+  } else {
+    agreementSection = '<div class="section section-action">'
+      + '<h2>Sign Your Inspection Agreement</h2>'
+      + '<p class="muted">Your report cannot be released until your agreement is signed. This takes about a minute.</p>'
+      + '<a href="' + escapeHtml(agreementUrl) + '" class="btn btn-primary">Review &amp; Sign Agreement</a>'
+      + '</div>';
+  }
+
+  // ── Reschedule section ─────────────────────────────────────
+  let rescheduleSection = '';
+  if (!isCancelled && !inspectionPast) {
+    rescheduleSection = '<div class="section">'
+      + '<h2>Need to Reschedule?</h2>'
+      + '<p class="muted">Fill out the form below and Jaren will reach out to find a new time. For same-day changes, please call (480) 618-0805.</p>'
+      + '<form id="rescheduleForm" method="POST" action="/api/reschedule">'
+      + '<input type="hidden" name="confId" value="' + escapeHtml(confId) + '"/>'
+      + '<input type="hidden" name="name" value="' + escapeHtml(fullName || '') + '"/>'
+      + '<input type="hidden" name="phone" value="' + escapeHtml((buyer && buyer.phone) || '') + '"/>'
+      + '<input type="hidden" name="email" value="' + escapeHtml((buyer && buyer.email) || '') + '"/>'
+      + '<textarea name="message" rows="3" placeholder="Preferred dates/times or reason for rescheduling..." required></textarea>'
+      + '<button type="submit" class="btn btn-secondary">Request Reschedule</button>'
+      + '<div id="rescheduleResult" class="form-result"></div>'
+      + '</form>'
+      + '</div>';
+  }
+
+  // ── Report section ─────────────────────────────────────────
+  let reportSection = '';
+  if (!isCancelled) {
+    if (reportState === 'delivered') {
+      reportSection = '<div class="section section-good">'
+        + '<h2>Your Report</h2>'
+        + '<p>Your inspection report has been delivered to <strong>' + escapeHtml((buyer && buyer.email) || 'your email') + '</strong>.</p>'
+        + '<p class="muted">If you can\'t find it, check your spam folder, or call/text (480) 618-0805 and we will resend.</p>'
+        + '</div>';
+    } else if (inspectionPast) {
+      reportSection = '<div class="section">'
+        + '<h2>Your Report</h2>'
+        + '<p class="muted">Your report will be delivered to your email by end of day.</p>'
+        + '</div>';
+    } else {
+      reportSection = '<div class="section">'
+        + '<h2>Your Report</h2>'
+        + '<p class="muted">Your report will be delivered to your email the <strong>same day</strong> as your inspection.</p>'
+        + '</div>';
+    }
+  }
+
+  // ── Cancellation policy note (always visible if not cancelled) ──
+  const policyNote = isCancelled ? '' : '<p class="footnote">Need to change something? Call/text (480) 618-0805. Cancellations within 24 hours of the scheduled time may incur a fee.</p>';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Your Inspection — San Tan Property Inspections</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;padding:24px 16px;color:#222;}
+.outer{max-width:680px;margin:0 auto;}
+.logo-bar{background:#0F1C35;border-radius:10px;padding:18px;margin-bottom:16px;text-align:center;}
+.logo-title{font-family:Georgia,serif;font-size:1.05rem;font-weight:700;color:#C9A84C;letter-spacing:2px;}
+.logo-sub{font-family:Georgia,serif;font-size:.7rem;color:#E8C97A;letter-spacing:4px;margin-top:3px;}
+.card{background:#fff;border-radius:16px;padding:0;box-shadow:0 28px 70px rgba(0,0,0,.4);overflow:hidden;}
+.head{padding:28px 32px 20px;border-bottom:1px solid #E8DFC8;}
+.head h1{font-family:Georgia,serif;color:#1B2D52;font-size:1.5rem;margin-bottom:4px;}
+.head .greet{color:#888;font-size:.92rem;}
+.banner{padding:14px 20px;font-size:.9rem;line-height:1.5;}
+.banner strong{display:inline-block;margin-right:4px;}
+.banner-good{background:#e8f7ee;color:#0f5a32;border-bottom:1px solid #c8e6d2;}
+.banner-info{background:#EAF3FB;color:#1B2D52;border-bottom:1px solid #c8dceb;}
+.banner-action{background:#fff4e0;color:#7a4a00;border-bottom:1px solid #f0d99b;}
+.banner-bad{background:#fdecea;color:#8c2520;border-bottom:1px solid #f3c5c0;}
+.details{padding:24px 32px;background:#FAF7F0;border-bottom:1px solid #E8DFC8;}
+.details h2{font-family:Georgia,serif;font-size:.78rem;color:#888;text-transform:uppercase;letter-spacing:2px;margin-bottom:14px;}
+.detail-grid{display:grid;grid-template-columns:140px 1fr;gap:8px 16px;font-size:.92rem;line-height:1.5;}
+.detail-grid .lbl{color:#888;}
+.detail-grid .val{color:#1B2D52;font-weight:600;}
+.price-line{color:#C9A84C;font-weight:700;}
+.section{padding:24px 32px;border-bottom:1px solid #f0ebe0;}
+.section:last-of-type{border-bottom:none;}
+.section h2{font-family:Georgia,serif;color:#1B2D52;font-size:1.05rem;margin-bottom:10px;}
+.section p{color:#555;font-size:.9rem;line-height:1.6;margin-bottom:12px;}
+.section.section-action{background:#fff9ef;border-left:4px solid #C9A84C;}
+.section.section-good{background:#f4faf6;}
+.muted{color:#888 !important;font-size:.86rem !important;}
+.status-pill{display:inline-block;font-size:.78rem;font-weight:700;padding:5px 12px;border-radius:14px;letter-spacing:.5px;}
+.status-good{background:#e8f7ee;color:#0f5a32;}
+.btn{display:inline-block;background:#1B2D52;color:white;border:none;border-radius:10px;padding:14px 28px;font-size:.95rem;font-weight:700;cursor:pointer;text-decoration:none;transition:background .2s;font-family:inherit;}
+.btn:hover{background:#243a6e;}
+.btn-primary{background:#1B2D52;}
+.btn-secondary{background:#1B2D52;font-size:.88rem;padding:11px 22px;}
+.btn:disabled{background:#aaa;cursor:not-allowed;}
+textarea{width:100%;border:1.5px solid #E0D9CC;border-radius:8px;padding:10px 12px;font-size:.92rem;font-family:inherit;color:#1B2D52;outline:none;margin-bottom:12px;resize:vertical;min-height:72px;}
+textarea:focus{border-color:#C9A84C;}
+.form-result{margin-top:12px;font-size:.86rem;}
+.form-result.ok{color:#0f5a32;}
+.form-result.bad{color:#8c2520;}
+.footnote{color:#888;font-size:.78rem;text-align:center;padding:18px 32px 24px;line-height:1.6;}
+@media(max-width:540px){
+  .head{padding:22px 22px 16px;}
+  .details,.section{padding:20px 22px;}
+  .detail-grid{grid-template-columns:1fr;gap:2px 0;}
+  .detail-grid .lbl{margin-top:8px;font-size:.78rem;}
+}
+</style>
+</head>
+<body>
+<div class="outer">
+  <div class="logo-bar">
+    <div class="logo-title">SAN TAN PROPERTY</div>
+    <div class="logo-sub">INSPECTIONS</div>
+  </div>
+  <div class="card">
+    <div class="head">
+      <h1>Hi ${escapeHtml(buyerFirst)},</h1>
+      <div class="greet">Here are the details for your inspection.</div>
+    </div>
+    ${banner}
+    <div class="details">
+      <h2>Inspection Details</h2>
+      <div class="detail-grid">
+        <span class="lbl">Service</span><span class="val">${escapeHtml(svcLabel || '')}${addonsLine && addonsLine !== 'None' ? ' + ' + escapeHtml(addonsLine) : ''}</span>
+        <span class="lbl">Property</span><span class="val">${escapeHtml(address || '')}</span>
+        <span class="lbl">Date</span><span class="val">${escapeHtml(dateFmt || '')}</span>
+        <span class="lbl">Time</span><span class="val">${escapeHtml(time || '')}${endTime ? ' to ' + escapeHtml(endTime) : ''}</span>
+        <span class="lbl">Estimated Total</span><span class="val price-line">$${Number(finalPrice)||0}${isPaid ? ' &middot; <span style="color:#1ab464;font-size:.82rem">Paid</span>' : ''}</span>
+        <span class="lbl">Confirmation #</span><span class="val">${escapeHtml(confId || '')}</span>
+      </div>
+    </div>
+    ${agreementSection}
+    ${rescheduleSection}
+    ${reportSection}
+    ${policyNote}
+  </div>
+</div>
+<script>
+// Reschedule form submit handler — uses fetch so the page doesn't reload and lose context.
+(function(){
+  var form = document.getElementById('rescheduleForm');
+  if (!form) return;
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var result = document.getElementById('rescheduleResult');
+    var btn = form.querySelector('button[type="submit"]');
+    result.textContent = '';
+    result.className = 'form-result';
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    var fd = new FormData(form);
+    var body = {};
+    fd.forEach(function(v,k){ body[k] = v; });
+    fetch('/api/reschedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+    .then(function(res){
+      if (res.ok && res.data.success) {
+        result.textContent = 'Request sent. Jaren will reach out shortly.';
+        result.className = 'form-result ok';
+        form.querySelector('textarea').value = '';
+        btn.textContent = 'Sent ✓';
+        // Re-enable after a few seconds so they can send a second message if needed
+        setTimeout(function(){ btn.disabled = false; btn.textContent = 'Request Reschedule'; }, 4000);
+      } else {
+        result.textContent = (res.data && res.data.error) || 'Could not send request. Please call (480) 618-0805.';
+        result.className = 'form-result bad';
+        btn.disabled = false;
+        btn.textContent = 'Request Reschedule';
+      }
+    })
+    .catch(function(){
+      result.textContent = 'Network error. Please call (480) 618-0805.';
+      result.className = 'form-result bad';
+      btn.disabled = false;
+      btn.textContent = 'Request Reschedule';
+    });
+  });
+})();
+</script>
+</body>
+</html>`;
+}
+
+// Look up a delivered-report status for a given confirmation ID by querying the
+// inspector app's `reports` table (shared Postgres). Returns one of:
+//   'none'       — no report row exists yet
+//   'pending'    — report row exists but not delivered
+//   'completed'  — report row + completed_at set, not yet delivered
+//   'delivered'  — report has been delivered to client
+//
+// Defensive: if the reports table doesn't exist, or column names differ from
+// what we assume, returns 'none' and the hub falls back to time-based logic
+// (inspection-past → "delivered shortly"). No deploy dependency on inspector schema.
+async function getReportStatusForConfId(confId) {
+  if (!confId) return 'none';
+  try {
+    const r = await pool.query(
+      `SELECT delivered_at FROM reports
+        WHERE report_data->>'confId' = $1
+        ORDER BY id DESC LIMIT 1`,
+      [confId]
+    );
+    if (!r.rows.length) return 'none';
+    if (r.rows[0].delivered_at) return 'delivered';
+    return 'pending';
+  } catch(e) {
+    // Table may not exist on first run, or column names may differ.
+    // Don't spam the log — just return 'none' so the hub falls back gracefully.
+    return 'none';
+  }
+}
+
 // ── AGREEMENT PDF GENERATION ──────────────────────────────────
 async function generateAgreementPdf(booking, signedAt, signature, ip) {
   // Use puppeteer (already available in santan-inspector) to generate PDF
@@ -1421,9 +1700,11 @@ app.get('/confirm/:token', async function(req, res) {
   } catch(e) { console.error('DB confirmed save:', e.message); }
 
   // Generate agreement token for this confirmed booking
+  // Used for BOTH the agreement page and the customer hub — same token, same HMAC sig.
   const agreeToken = uuidv4();
   const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
   const agreementUrl = withSig(BASE_URL + '/agreement/' + agreeToken, agreeToken);
+  const hubUrl       = withSig(BASE_URL + '/i/'         + agreeToken, agreeToken);
 
   // Store agreement token temporarily so we can look up booking from it
   try {
@@ -1436,8 +1717,10 @@ app.get('/confirm/:token', async function(req, res) {
   } catch(e) { console.error('Agreement token store error:', e.message); }
 
   // SMS - buyer
+  // Sends the hub URL — single link that opens the status page where the
+  // client can sign the agreement, reschedule, or check report status.
   await sms(buyer.phone,
-    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nPlease sign your inspection agreement:\n' + agreementUrl + '\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
   );
 
   // SMS - buyer agent (only if phone provided)
@@ -1455,7 +1738,8 @@ app.get('/confirm/:token', async function(req, res) {
 
   const tripLineBuyer = tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '';
 
-  // Buyer confirmation email — includes agreement link
+  // Buyer confirmation email — links to the customer hub (single page with
+  // agreement signing, reschedule form, and report status).
   const buyerHtml = emailWrap(
     '<h2 style="color:#0F1C35">Inspection Confirmed</h2>'
     + '<p>Hi ' + escapeHtml(buyer.firstName) + ', here are your booking details:</p>'
@@ -1468,25 +1752,14 @@ app.get('/confirm/:token', async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
     + '</table>'
     + '<p>Payment can be made on inspection day. We accept cash, Venmo, Zelle, or credit/debit card.</p>'
-    + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
-    + '<p style="margin:0 0 8px;font-size:.92rem;font-weight:700;color:#1B2D52">ACTION REQUIRED: Sign Your Inspection Agreement</p>'
-    + '<p style="margin:0 0 12px;font-size:.84rem;color:#555;line-height:1.6">Your report will not be released until your agreement is signed. Please take a moment to review and sign before inspection day.</p>'
-    + '<a href="' + agreementUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.88rem">Review &amp; Sign Agreement</a>'
+    + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:18px 20px;margin:24px 0;border-radius:0 8px 8px 0">'
+    + '<p style="margin:0 0 6px;font-size:.95rem;font-weight:700;color:#1B2D52">Your Inspection Hub</p>'
+    + '<p style="margin:0 0 14px;font-size:.86rem;color:#555;line-height:1.6">Open the link below to sign your agreement, request a reschedule, or check the status of your report. Bookmark it — this is your one-stop page for everything.</p>'
+    + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:13px 26px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.9rem">Open Inspection Hub</a>'
+    + '<p style="margin:14px 0 0;font-size:.78rem;color:#888;line-height:1.5"><strong style="color:#7a4a00">Action needed:</strong> your inspection agreement must be signed before the report can be released. The hub above will walk you through it.</p>'
     + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
     + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
-    + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
-    + '<div style="background:#FAF7F0;border-radius:8px;padding:16px;margin-top:8px">'
-    + '<p style="font-size:.82rem;color:#8C7B6B;margin-bottom:10px"><strong style="color:#1B2D52">Need to reschedule?</strong> Fill out the form below and Jaren will reach out to find a new time.</p>'
-    + '<form action="https://santanproperty-backend-production.up.railway.app/api/reschedule" method="POST" style="display:flex;flex-direction:column;gap:8px">'
-    + '<input type="hidden" name="confId" value="' + escapeHtml(confId) + '"/>'
-    + '<input type="hidden" name="name" value="' + escapeHtml(buyer.firstName + ' ' + buyer.lastName) + '"/>'
-    + '<input type="hidden" name="phone" value="' + escapeHtml(buyer.phone) + '"/>'
-    + '<input type="hidden" name="email" value="' + escapeHtml(buyer.email) + '"/>'
-    + '<textarea name="message" rows="2" placeholder="Preferred dates/times or reason for rescheduling..." style="padding:8px;border:1px solid #E2D9C8;border-radius:6px;font-family:Georgia,serif;font-size:.83rem;resize:vertical"></textarea>'
-    + '<button type="submit" style="background:#1B2D52;color:white;padding:9px 20px;border:none;border-radius:6px;font-size:.83rem;font-weight:700;cursor:pointer;align-self:flex-start">Request Reschedule</button>'
-    + '</form>'
-    + '</div>'
   );
 
   try {
@@ -1795,6 +2068,46 @@ app.get('/api/agreement-status/:confId', async function(req, res) {
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── CUSTOMER HUB ──────────────────────────────────────────────
+// Single status page for the client. Linked from the booking confirmation
+// email; replaces having to dig through separate emails for the agreement,
+// reschedule form, and report. URL: /i/:token?s=:sig where token is the
+// agreement token stored on confirmed_bookings.data.agreementToken.
+app.get('/i/:token', agreementLimiter, async function(req, res) {
+  const token = req.params.token;
+  const sigCheck = verifySignedToken(token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Hub link rejected: ' + sigCheck.reason);
+    return res.status(403).send('<h2 style="font-family:sans-serif;text-align:center;padding:60px 24px">Invalid or expired link. Check your email for the original message, or call (480) 618-0805.</h2>');
+  }
+  if (sigCheck.legacy) console.warn('Hub: accepting legacy unsigned token');
+
+  let row;
+  try {
+    const r = await pool.query(
+      `SELECT * FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
+      [token]
+    );
+    row = r.rows[0];
+  } catch(e) {
+    console.error('Hub DB read error:', e.message);
+    return res.status(500).send('<h2 style="font-family:sans-serif;text-align:center;padding:60px 24px">Database error. Please call (480) 618-0805.</h2>');
+  }
+
+  if (!row) {
+    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Inspection — San Tan Property Inspections</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:60px 24px;background:#0F1C35;color:#fff">
+<h2>This link has expired or is no longer valid.</h2>
+<p style="margin-top:12px;color:#aaa">If you need to check on your inspection, please call (480) 618-0805.</p>
+</body></html>`);
+  }
+
+  const booking = row.data || {};
+  const reportState = await getReportStatusForConfId(booking.confId);
+
+  res.send(buildHubPage(booking, row, reportState, token));
 });
 
 // ── CANCEL BOOKING ────────────────────────────────────────────
@@ -2110,12 +2423,13 @@ async function load() {
         const cancelBtn = isCancelled
           ? '<button data-action="hard-delete" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Delete</button>'
           : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
+        const editLink = '<a href="/admin/booking/'+encodeURIComponent(bd.confId)+'" target="_blank" style="background:none;color:#C9A84C;border:1px solid #C9A84C;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px;text-decoration:none;display:inline-block">Edit</a>';
         return '<tr>' +
           '<td><div class="conf">'+esc(bd.confId)+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
           '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+editLink+cancelBtn+'</div></td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -2884,6 +3198,699 @@ app.post('/admin/clear-all-pending', adminActionLimiter, async function(req, res
     const r = await pool.query('DELETE FROM pending_bookings RETURNING token');
     res.json({ success: true, deleted: r.rows.length });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── ADMIN: PER-BOOKING EDIT PAGE ──────────────────────────────
+// Renders a full edit form for one booking. Auth via Basic Auth (same as
+// /admin). Editable fields cover everything Jaren typically needs to adjust
+// after the customer books: date/time, address, sqft, year, service type,
+// add-ons, manual price override, discount, paid status, contact info,
+// internal notes.
+//
+// Submit hits POST /admin/booking/:confId — see that handler for the save logic.
+app.get('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const confId = req.params.confId;
+  let row;
+  try {
+    const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return res.status(404).send('<h2 style="font-family:sans-serif;padding:60px 24px;text-align:center">Booking not found: ' + escapeHtml(confId) + '</h2><p style="text-align:center"><a href="/admin">← Back to admin</a></p>');
+    row = r.rows[0];
+  } catch(e) {
+    console.error('Admin edit GET:', e.message);
+    return res.status(500).send('<h2>Database error.</h2>');
+  }
+
+  const d  = row.data || {};
+  const ba = d.buyerAgent  || {};
+  const sa = d.sellerAgent || {};
+  const bu = d.buyer       || {};
+  const addons = Array.isArray(d.addons) ? d.addons : [];
+
+  // Map of normalized addon ids → enabled state. Existing data may have legacy
+  // string-shape addons (display labels) or {id, name} objects, so normalize both.
+  const addonEnabled = { termite: false, pool: false, spa: false, shed: false };
+  for (const a of addons) {
+    let id = null;
+    if (typeof a === 'string') {
+      const lower = a.toLowerCase();
+      for (const k of Object.keys(PRICE_ADDONS)) {
+        if (lower === k || lower.indexOf(PRICE_ADDONS[k].name.toLowerCase()) !== -1) { id = k; break; }
+      }
+    } else if (a && typeof a === 'object' && a.id) {
+      if (PRICE_ADDONS[a.id]) id = a.id;
+    }
+    if (id) addonEnabled[id] = true;
+  }
+
+  const SVC = {
+    'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection',
+    'new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection','reinspection':'Re-Inspection',
+  };
+  const svcOptions = Object.keys(SVC).map(function(k){
+    return '<option value="' + k + '"' + (d.inspType === k ? ' selected' : '') + '>' + SVC[k] + '</option>';
+  }).join('');
+
+  const tripApply  = !!(d.tripCharge && d.tripCharge.apply);
+  const tripMiles  = d.tripCharge && d.tripCharge.miles ? d.tripCharge.miles : null;
+  const milesRound = row.miles != null ? Number(row.miles).toFixed(2) : null;
+
+  const paymentMethod = row.payment_method || '';
+  const isPaid        = !!row.paid_at;
+  const isCancelled   = !!row.cancelled_at;
+  const isSigned      = !!row.agreement_signed_at;
+
+  const hubUrl = d.agreementToken
+    ? '/i/' + encodeURIComponent(d.agreementToken) + '?s=' + encodeURIComponent(signToken(d.agreementToken))
+    : null;
+
+  // Pre-build conditional status badges (avoid backtick-in-template quoting)
+  const badgeCancelled = isCancelled ? '<span class="status-tag tag-bad">Cancelled</span>' : '';
+  const badgeSigned    = isSigned    ? '<span class="status-tag tag-good">Signed</span>' : '<span class="status-tag tag-warn">Unsigned</span>';
+  const badgePaid      = isPaid      ? '<span class="status-tag tag-good">Paid' + (paymentMethod ? ' · ' + escapeHtml(paymentMethod) : '') + '</span>' : '<span class="status-tag tag-warn">Unpaid</span>';
+  const hubLink        = hubUrl ? '<a href="' + escapeHtml(hubUrl) + '" target="_blank" class="status-link">View customer hub →</a>' : '';
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Edit ${escapeHtml(confId)} — Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;color:#BEC8D8;min-height:100vh;padding:0;}
+nav{background:#0a1428;border-bottom:2px solid #C9A84C;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}
+nav h1{font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:1px;text-transform:uppercase;}
+nav a{color:#8A9AB5;text-decoration:none;font-size:.85rem;}
+nav a:hover{color:#C9A84C;}
+.wrap{max-width:920px;margin:0 auto;padding:28px 20px;}
+.title-bar{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:24px;flex-wrap:wrap;gap:12px;}
+.title-bar h2{font-size:1.4rem;color:#fff;font-weight:700;}
+.title-bar .sub{font-size:.85rem;color:#8A9AB5;margin-top:4px;}
+.status-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.status-tag{display:inline-block;font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:12px;text-transform:uppercase;letter-spacing:.5px;}
+.tag-good{background:rgba(26,180,100,.15);color:#1ab464;}
+.tag-warn{background:rgba(232,168,124,.15);color:#e8a87c;}
+.tag-bad{background:rgba(192,57,43,.18);color:#e8a87c;}
+.status-link{font-size:.75rem;color:#C9A84C;text-decoration:none;margin-left:4px;}
+.status-link:hover{text-decoration:underline;}
+.card{background:#1B2D52;border-radius:10px;padding:24px 28px;margin-bottom:20px;}
+.card h3{font-size:.82rem;font-weight:700;color:#C9A84C;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:18px;padding-bottom:10px;border-bottom:1px solid #243660;}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px 18px;margin-bottom:14px;}
+.field{display:flex;flex-direction:column;gap:5px;}
+.field-wide{grid-column:1 / -1;}
+label{font-size:.78rem;color:#8A9AB5;text-transform:uppercase;letter-spacing:.8px;}
+input[type=text],input[type=email],input[type=tel],input[type=number],input[type=date],input[type=time],select,textarea{
+  background:#243660;border:1px solid #344870;color:#fff;padding:9px 12px;border-radius:6px;font-size:.9rem;font-family:inherit;outline:none;width:100%;
+}
+input:focus,select:focus,textarea:focus{border-color:#C9A84C;background:#2a3e6f;}
+textarea{resize:vertical;min-height:64px;line-height:1.5;}
+.addons-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;}
+.addon-chk{display:flex;align-items:center;gap:8px;background:#243660;border:1px solid #344870;padding:9px 12px;border-radius:6px;cursor:pointer;font-size:.88rem;color:#E8DEC4;}
+.addon-chk input{accent-color:#C9A84C;}
+.addon-chk:hover{background:#2a3e6f;}
+.hint{font-size:.74rem;color:#8A9AB5;font-style:italic;margin-top:3px;line-height:1.4;}
+.checkbox-row{display:flex;align-items:center;gap:10px;background:#243660;border:1px solid #344870;padding:10px 14px;border-radius:6px;margin-bottom:10px;}
+.checkbox-row input{accent-color:#C9A84C;width:16px;height:16px;}
+.checkbox-row label{text-transform:none;letter-spacing:0;color:#E8DEC4;font-size:.88rem;margin:0;cursor:pointer;}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;}
+button[type=submit],.btn-primary{background:#C9A84C;color:#0F1C35;border:none;border-radius:8px;padding:12px 28px;font-size:.92rem;font-weight:700;cursor:pointer;font-family:inherit;}
+button[type=submit]:hover,.btn-primary:hover{background:#d4b25a;}
+button[type=submit]:disabled{background:#888;cursor:not-allowed;}
+.btn-secondary{background:transparent;color:#8A9AB5;border:1px solid #344870;border-radius:8px;padding:11px 22px;font-size:.88rem;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block;}
+.btn-secondary:hover{color:#fff;border-color:#8A9AB5;}
+.notify-row{background:#243660;border:1px solid #344870;border-radius:8px;padding:14px 18px;margin-bottom:14px;}
+.notify-row label{color:#E8DEC4;font-size:.9rem;text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:10px;cursor:pointer;}
+.notify-row .hint{margin-top:8px;margin-left:26px;}
+.read-only{color:#8A9AB5;font-size:.85rem;background:#162240;padding:8px 12px;border-radius:6px;}
+.flash{padding:12px 18px;border-radius:8px;margin-bottom:20px;font-size:.9rem;}
+.flash-ok{background:rgba(26,180,100,.15);color:#1ab464;border:1px solid rgba(26,180,100,.4);}
+.flash-bad{background:rgba(192,57,43,.18);color:#e8a87c;border:1px solid rgba(192,57,43,.4);}
+@media(max-width:600px){.wrap{padding:18px 14px;}.card{padding:18px 18px;}.title-bar h2{font-size:1.15rem;}}
+</style>
+</head>
+<body>
+<nav>
+  <h1>Edit Booking</h1>
+  <a href="/admin">← Back to admin</a>
+</nav>
+<div class="wrap">
+  <div class="title-bar">
+    <div>
+      <h2>${escapeHtml(d.fullName || '(no name)')}</h2>
+      <div class="sub">${escapeHtml(confId)} · confirmed ${escapeHtml(new Date(row.confirmed_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}))}</div>
+    </div>
+    <div class="status-row">
+      ${badgeCancelled}
+      ${badgeSigned}
+      ${badgePaid}
+      ${hubLink}
+    </div>
+  </div>
+
+  <div id="flash"></div>
+
+  <form id="editForm" method="POST" action="/admin/booking/${encodeURIComponent(confId)}">
+
+    <div class="card">
+      <h3>Date &amp; Time</h3>
+      <div class="row">
+        <div class="field">
+          <label>Date</label>
+          <input type="date" name="date" value="${escapeHtml(d.date || '')}"/>
+        </div>
+        <div class="field">
+          <label>Time</label>
+          <select name="time">
+            ${ALL_SLOTS.map(function(s){ return '<option value="' + s + '"' + (d.time === s ? ' selected' : '') + '>' + s + '</option>'; }).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="hint">Changing the date or time will update the Google Calendar event if one exists. Tick the notify box below to also email the client.</div>
+    </div>
+
+    <div class="card">
+      <h3>Property</h3>
+      <div class="row">
+        <div class="field field-wide">
+          <label>Address</label>
+          <input type="text" name="address" value="${escapeHtml(d.address || '')}" maxlength="${LEN.address}"/>
+          ${milesRound ? '<div class="hint">Current round-trip: ' + milesRound + ' miles' + (tripApply ? ' (trip charge applies, $' + TRIP_CHARGE_AMT + ')' : '') + '. Re-saving with a new address recomputes both.</div>' : '<div class="hint">Saving with a new address triggers a fresh Distance Matrix lookup for mileage and trip charge.</div>'}
+        </div>
+        <div class="field">
+          <label>Square Footage</label>
+          <input type="number" name="sqft" value="${escapeHtml(String(d.sqft || ''))}" min="0" max="20000"/>
+        </div>
+        <div class="field">
+          <label>Year Built</label>
+          <input type="number" name="yearBuilt" value="${escapeHtml(String(d.yearBuilt || ''))}" min="1800" max="2100"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Service &amp; Add-Ons</h3>
+      <div class="row">
+        <div class="field">
+          <label>Primary Service</label>
+          <select name="inspType">${svcOptions}</select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px">
+        <label>Add-Ons</label>
+        <div class="addons-grid">
+          ${Object.keys(PRICE_ADDONS).map(function(k){
+            const a = PRICE_ADDONS[k];
+            return '<label class="addon-chk"><input type="checkbox" name="addon_' + k + '" value="1"' + (addonEnabled[k] ? ' checked' : '') + '/> ' + a.name + ' (+$' + a.p + ')</label>';
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Pricing</h3>
+      <div class="row">
+        <div class="field">
+          <label>Price Override ($)</label>
+          <input type="number" name="priceOverride" value="${escapeHtml(String(d.priceOverride || ''))}" min="0" max="10000" step="1" placeholder="Leave blank to auto-compute"/>
+          <div class="hint">When set, bypasses square-footage pricing. Discount + trip charge still apply on top.</div>
+        </div>
+        <div class="field">
+          <label>Discount Code</label>
+          <input type="text" name="discountCode" value="${escapeHtml(d.discountCode || '')}" maxlength="${LEN.code}" placeholder="Optional"/>
+        </div>
+        <div class="field">
+          <label>Discount % (manual)</label>
+          <input type="number" name="discountPct" value="${escapeHtml(String(d.discountPct || ''))}" min="0" max="100" placeholder="Only if no code"/>
+          <div class="hint">If both code &amp; manual % are set, the code wins (server looks it up).</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Current Final Price</label>
+          <div class="read-only">$${Number(d.finalPrice)||0}${tripApply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : ''}</div>
+        </div>
+        <div class="field">
+          <label>Payment Status</label>
+          <select name="paymentMethod">
+            <option value=""${paymentMethod === '' && !isPaid ? ' selected' : ''}>— Unpaid —</option>
+            <option value="cash"${paymentMethod === 'cash' ? ' selected' : ''}>Paid · Cash</option>
+            <option value="card"${paymentMethod === 'card' ? ' selected' : ''}>Paid · Card</option>
+            <option value="venmo"${paymentMethod === 'venmo' ? ' selected' : ''}>Paid · Venmo</option>
+            <option value="zelle"${paymentMethod === 'zelle' ? ' selected' : ''}>Paid · Zelle</option>
+            <option value="__paid_other"${isPaid && !paymentMethod ? ' selected' : ''}>Paid · Other</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Client</h3>
+      <div class="row">
+        <div class="field">
+          <label>First Name</label>
+          <input type="text" name="buyer_firstName" value="${escapeHtml(bu.firstName || '')}" maxlength="${LEN.name}"/>
+        </div>
+        <div class="field">
+          <label>Last Name</label>
+          <input type="text" name="buyer_lastName" value="${escapeHtml(bu.lastName || '')}" maxlength="${LEN.name}"/>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" name="buyer_email" value="${escapeHtml(bu.email || '')}" maxlength="${LEN.email}"/>
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" name="buyer_phone" value="${escapeHtml(bu.phone || '')}" maxlength="${LEN.phone}"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Buyer's Agent <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(optional)</span></h3>
+      <div class="row">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" name="ba_name" value="${escapeHtml(ba.name || '')}" maxlength="${LEN.name}"/>
+        </div>
+        <div class="field">
+          <label>Brokerage</label>
+          <input type="text" name="ba_brokerage" value="${escapeHtml(ba.brokerage || '')}" maxlength="${LEN.brokerage}"/>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" name="ba_email" value="${escapeHtml(ba.email || '')}" maxlength="${LEN.email}"/>
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" name="ba_phone" value="${escapeHtml(ba.phone || '')}" maxlength="${LEN.phone}"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Seller's Agent <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(optional)</span></h3>
+      <div class="row">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" name="sa_name" value="${escapeHtml(sa.name || '')}" maxlength="${LEN.name}"/>
+        </div>
+        <div class="field">
+          <label>Brokerage</label>
+          <input type="text" name="sa_brokerage" value="${escapeHtml(sa.brokerage || '')}" maxlength="${LEN.brokerage}"/>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" name="sa_email" value="${escapeHtml(sa.email || '')}" maxlength="${LEN.email}"/>
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" name="sa_phone" value="${escapeHtml(sa.phone || '')}" maxlength="${LEN.phone}"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Notes</h3>
+      <div class="row">
+        <div class="field field-wide">
+          <label>Customer Notes <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(provided by client during booking)</span></label>
+          <textarea name="notes" maxlength="${LEN.notes}" rows="3">${escapeHtml(d.notes || '')}</textarea>
+        </div>
+        <div class="field field-wide">
+          <label>Internal Notes <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(Jaren only, never shown to client)</span></label>
+          <textarea name="internalNotes" maxlength="${LEN.notes}" rows="3" placeholder="CBS code, lockbox info, access notes, anything to remember about this job...">${escapeHtml(d.internalNotes || '')}</textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Save</h3>
+      <div class="notify-row">
+        <label><input type="checkbox" name="notifyClient" value="1"/> <strong>Notify client of these changes by email</strong></label>
+        <div class="hint">Tick this when the date, time, or address has changed and you want the client to know. Pricing-only or notes-only edits usually don't need an email.</div>
+      </div>
+      <div class="actions">
+        <button type="submit" id="submitBtn">Save Changes</button>
+        <a href="/admin" class="btn-secondary">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  var form = document.getElementById('editForm');
+  var btn  = document.getElementById('submitBtn');
+  var flash = document.getElementById('flash');
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    flash.innerHTML = '';
+    var fd = new FormData(form);
+    var body = {};
+    fd.forEach(function(v, k){
+      if (body[k] === undefined) body[k] = v;
+      else if (Array.isArray(body[k])) body[k].push(v);
+      else body[k] = [body[k], v];
+    });
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' /* basic auth auto-sent */ },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+    .then(function(res){
+      if (res.ok && res.data.success) {
+        flash.innerHTML = '<div class="flash flash-ok">Saved.' + (res.data.notified ? ' Client was emailed.' : '') + '</div>';
+        btn.textContent = 'Saved ✓';
+        // Scroll up so the flash is visible, then re-enable after a moment
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        setTimeout(function(){ btn.disabled = false; btn.textContent = 'Save Changes'; }, 2000);
+      } else {
+        flash.innerHTML = '<div class="flash flash-bad">' + (res.data && res.data.error ? res.data.error : 'Save failed.') + '</div>';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        btn.disabled = false;
+        btn.textContent = 'Save Changes';
+      }
+    })
+    .catch(function(err){
+      flash.innerHTML = '<div class="flash flash-bad">Network error: ' + err.message + '</div>';
+      btn.disabled = false;
+      btn.textContent = 'Save Changes';
+    });
+  });
+})();
+</script>
+</body>
+</html>`);
+});
+
+// POST: apply edit
+// - Validates input lengths and email/phone formats
+// - Recomputes price via computePrice unless priceOverride is set
+// - Reruns trip-charge/mileage if address changed
+// - Updates Google Calendar event if date/time/address/service changed
+// - Optionally sends client an "updated" email when notifyClient=1
+app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const confId = req.params.confId;
+
+  let row;
+  try {
+    const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    row = r.rows[0];
+  } catch(e) {
+    return res.status(500).json({ error: 'DB read failed: ' + e.message });
+  }
+
+  const old = row.data || {};
+  const b   = req.body || {};
+
+  // ── Pull + clip inputs ─────────────────────────────────────
+  const newDate    = clip(b.date,    20);
+  const newTime    = clip(b.time,    20);
+  const newAddress = clip(b.address, LEN.address);
+  const newSqft    = parseInt(b.sqft) || 0;
+  const newYear    = parseInt(b.yearBuilt) || 0;
+  const newInspType= clip(b.inspType, 50);
+
+  const newAddons = [];
+  for (const k of Object.keys(PRICE_ADDONS)) {
+    if (b['addon_' + k] === '1' || b['addon_' + k] === 'on' || b['addon_' + k] === true) {
+      newAddons.push({ id: k, name: PRICE_ADDONS[k].name });
+    }
+  }
+
+  const priceOverrideRaw = b.priceOverride;
+  const priceOverride = (priceOverrideRaw !== '' && priceOverrideRaw != null && !isNaN(priceOverrideRaw))
+    ? Math.max(0, Math.min(10000, parseInt(priceOverrideRaw))) : null;
+
+  const newDiscountCode = clip(b.discountCode, LEN.code).toUpperCase() || null;
+  const manualDiscountPct = (b.discountPct !== '' && b.discountPct != null && !isNaN(b.discountPct))
+    ? Math.max(0, Math.min(100, parseInt(b.discountPct))) : null;
+
+  const paymentMethodRaw = clip(b.paymentMethod, 20);
+  // Allowed payment values
+  const isPaidNow = paymentMethodRaw !== '';
+  const paymentMethod = (paymentMethodRaw === '__paid_other') ? null : (paymentMethodRaw || null);
+
+  const newNotes         = clip(b.notes,         LEN.notes);
+  const newInternalNotes = clip(b.internalNotes, LEN.notes);
+
+  const newBuyer = {
+    firstName: clip(b.buyer_firstName, LEN.name),
+    lastName:  clip(b.buyer_lastName,  LEN.name),
+    email:     clip(b.buyer_email,     LEN.email),
+    phone:     clip(b.buyer_phone,     LEN.phone),
+  };
+  const newBA = {
+    name:      clip(b.ba_name,      LEN.name),
+    brokerage: clip(b.ba_brokerage, LEN.brokerage),
+    email:     clip(b.ba_email,     LEN.email),
+    phone:     clip(b.ba_phone,     LEN.phone),
+  };
+  const newSA = {
+    name:      clip(b.sa_name,      LEN.name),
+    brokerage: clip(b.sa_brokerage, LEN.brokerage),
+    email:     clip(b.sa_email,     LEN.email),
+    phone:     clip(b.sa_phone,     LEN.phone),
+  };
+  const notifyClient = b.notifyClient === '1' || b.notifyClient === 'on' || b.notifyClient === true;
+
+  // ── Validate ──────────────────────────────────────────────
+  if (!newDate || !newTime) return res.status(400).json({ error: 'Date and time are required.' });
+  if (!newAddress)          return res.status(400).json({ error: 'Address is required.' });
+  if (!newBuyer.firstName)  return res.status(400).json({ error: 'Buyer first name is required.' });
+  if (!newBuyer.email || !isValidEmail(newBuyer.email)) return res.status(400).json({ error: 'Buyer email is invalid.' });
+  if (!newBuyer.phone || !isValidPhone(newBuyer.phone)) return res.status(400).json({ error: 'Buyer phone is invalid.' });
+  if (newBA.email && !isValidEmail(newBA.email)) return res.status(400).json({ error: "Buyer's agent email is invalid." });
+  if (newBA.phone && !isValidPhone(newBA.phone)) return res.status(400).json({ error: "Buyer's agent phone is invalid." });
+  if (newSA.email && !isValidEmail(newSA.email)) return res.status(400).json({ error: "Seller's agent email is invalid." });
+  if (newSA.phone && !isValidPhone(newSA.phone)) return res.status(400).json({ error: "Seller's agent phone is invalid." });
+  if (ALL_SLOTS.indexOf(newTime) === -1)         return res.status(400).json({ error: 'Time slot is invalid.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate))      return res.status(400).json({ error: 'Date must be YYYY-MM-DD.' });
+  if (newSqft <= 0)                              return res.status(400).json({ error: 'Square footage is required.' });
+
+  // ── Recompute pricing ─────────────────────────────────────
+  // computePrice gives us base + age + addons + heat from authoritative tables.
+  const priced = computePrice({ sqft: newSqft, yearBuilt: newYear, addons: newAddons, date: newDate, time: newTime });
+  if (!priced) return res.status(400).json({ error: 'Invalid square footage for pricing.' });
+
+  // Base = override if set, else computed
+  let totalPrice = priceOverride !== null ? priceOverride : priced.price;
+
+  // Apply discount (code beats manual %)
+  let discountPctApplied = null;
+  let discountAmt = null;
+  if (newDiscountCode) {
+    try {
+      const c = await pool.query('SELECT pct FROM discount_codes WHERE UPPER(code) = $1 LIMIT 1', [newDiscountCode]);
+      if (c.rows.length) {
+        discountPctApplied = Math.max(0, Math.min(100, Number(c.rows[0].pct)||0));
+        discountAmt = Math.round(totalPrice * discountPctApplied / 100);
+        totalPrice  = Math.max(0, totalPrice - discountAmt);
+      }
+    } catch(_) {}
+  } else if (manualDiscountPct !== null && manualDiscountPct > 0) {
+    discountPctApplied = manualDiscountPct;
+    discountAmt = Math.round(totalPrice * manualDiscountPct / 100);
+    totalPrice  = Math.max(0, totalPrice - discountAmt);
+  }
+
+  // Recompute trip charge / mileage if address changed
+  let tripCharge, miles;
+  const addressChanged = newAddress.trim() !== (old.address || '').trim();
+  if (addressChanged) {
+    const trip = await checkTripCharge(newAddress);
+    tripCharge = trip;
+    miles = (trip.miles !== null && trip.miles !== undefined)
+      ? Math.round(trip.miles * 2 * 100) / 100
+      : null;
+  } else {
+    tripCharge = old.tripCharge || { apply: false, miles: null, city: null };
+    miles = row.miles != null ? Number(row.miles) : null;
+  }
+  const finalPrice = tripCharge.apply ? totalPrice + TRIP_CHARGE_AMT : totalPrice;
+
+  // Recompute dateFmt + duration
+  const sm = slotToMins(newTime);
+  const slotH = Math.floor(sm/60), slotM = sm%60;
+  const startDT = new Date(`${newDate}T${String(slotH).padStart(2,'0')}:${String(slotM).padStart(2,'0')}:00-07:00`);
+  const totalMins = priced.mins;
+  const endDT = new Date(startDT.getTime() + totalMins*60000);
+  const dateFmt = startDT.toLocaleDateString('en-US',{ weekday:'long', year:'numeric', month:'long', day:'numeric', timeZone: TIMEZONE });
+  // endTime label e.g. "10:30 AM"
+  const endTime = endDT.toLocaleTimeString('en-US', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' });
+
+  const SVC = {
+    'pre-purchase':'Pre-Purchase Inspection','pre-listing':'Pre-Listing Inspection',
+    'new-construction':'New Construction Inspection','warranty':'Pre-One Year Warranty Inspection','reinspection':'Re-Inspection',
+  };
+  const svcLabel = SVC[newInspType] || old.svcLabel || newInspType;
+  const addonsLine = newAddons.length ? newAddons.map(function(a){ return a.name; }).join(', ') : 'None';
+
+  // ── Merge data ────────────────────────────────────────────
+  // Preserve immutable fields (confId, agreementToken, calId, createdAt, confirmedAt).
+  const newData = {
+    ...old,
+    address: newAddress,
+    sqft: newSqft,
+    yearBuilt: newYear,
+    inspType: newInspType,
+    svcLabel,
+    addons: newAddons,
+    addonsLine,
+    totalPrice,
+    finalPrice,
+    totalMins,
+    date: newDate,
+    time: newTime,
+    endTime,
+    dateFmt,
+    fullName: (newBuyer.firstName + ' ' + newBuyer.lastName).trim(),
+    buyer: newBuyer,
+    buyerAgent: (newBA.name || newBA.email || newBA.phone) ? newBA : null,
+    sellerAgent: (newSA.name || newSA.email || newSA.phone) ? newSA : null,
+    notes: newNotes,
+    internalNotes: newInternalNotes,
+    discountCode: newDiscountCode,
+    discountPct: discountPctApplied,
+    discountAmount: discountAmt,
+    priceOverride,
+    tripCharge,
+    miles,
+  };
+
+  // ── Save to DB ────────────────────────────────────────────
+  try {
+    if (isPaidNow) {
+      // COALESCE keeps the existing paid_at if already paid; only stamps fresh if unpaid.
+      await pool.query(
+        `UPDATE confirmed_bookings
+            SET data = $1::jsonb,
+                miles = $2,
+                paid_at = COALESCE(paid_at, NOW()),
+                payment_method = $3
+          WHERE conf_id = $4`,
+        [JSON.stringify(newData), miles, paymentMethod, confId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE confirmed_bookings
+            SET data = $1::jsonb,
+                miles = $2,
+                paid_at = NULL,
+                payment_method = NULL
+          WHERE conf_id = $3`,
+        [JSON.stringify(newData), miles, confId]
+      );
+    }
+  } catch(e) {
+    console.error('Admin edit save:', e.message);
+    return res.status(500).json({ error: 'Save failed: ' + e.message });
+  }
+
+  // ── Calendar update ───────────────────────────────────────
+  // Update the existing event if calId is stored. If anything fails, log + move on
+  // — DB is the source of truth.
+  const calVisibleChanged = (
+    newDate !== old.date ||
+    newTime !== old.time ||
+    newAddress !== old.address ||
+    svcLabel !== old.svcLabel ||
+    newData.fullName !== old.fullName
+  );
+  if (old.calId && calVisibleChanged) {
+    try {
+      const descLines = [
+        'Conf: ' + confId, 'Service: ' + svcLabel,
+        newAddons.length ? 'Add-ons: ' + addonsLine : null,
+        'Address: ' + newAddress, 'Sq Ft: ' + newSqft + ' | Year: ' + newYear,
+        'Total: $' + finalPrice + (tripCharge.apply ? ' (incl. trip charge)' : ''), '',
+        'BUYER: ' + newData.fullName + ' | ' + newBuyer.phone + ' | ' + newBuyer.email,
+        (newBA.name || newBA.email || newBA.phone) ? 'BUYERS AGENT: ' + newBA.name + (newBA.brokerage ? ' — ' + newBA.brokerage : '') + (newBA.phone ? ' | ' + newBA.phone : '') : 'BUYERS AGENT: None provided',
+        (newSA.name || newSA.email || newSA.phone) ? 'SELLERS AGENT: ' + newSA.name + (newSA.brokerage ? ' — ' + newSA.brokerage : '') + ' | ' + (newSA.phone||'—') : null,
+        newInternalNotes ? 'Internal: ' + newInternalNotes : null,
+        newNotes ? 'Client notes: ' + newNotes : null,
+        '[Edited via admin ' + new Date().toLocaleString('en-US', { timeZone: TIMEZONE }) + ']',
+      ].filter(Boolean).join('\n');
+
+      await calendar.events.update({
+        calendarId: CALENDAR_ID,
+        eventId: old.calId,
+        sendUpdates: 'none',  // Suppress Google's own "event changed" emails — we send our own when notifyClient is true.
+        resource: {
+          summary: svcLabel + ' — ' + newData.fullName,
+          location: newAddress,
+          description: descLines,
+          start: { dateTime: startDT.toISOString(), timeZone: TIMEZONE },
+          end:   { dateTime: endDT.toISOString(),   timeZone: TIMEZONE },
+        },
+      });
+      console.log('Calendar event updated: ' + old.calId);
+    } catch(e) {
+      console.warn('Calendar update failed (DB still saved):', e.message);
+    }
+  }
+
+  // ── Notify client if requested ───────────────────────────
+  let notified = false;
+  if (notifyClient && newBuyer.email) {
+    try {
+      const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
+      const hubUrl = old.agreementToken
+        ? withSig(BASE_URL + '/i/' + old.agreementToken, old.agreementToken)
+        : null;
+
+      // Build a "what changed" list. Keep it factual and short.
+      const changes = [];
+      if (newDate !== old.date)         changes.push('Date');
+      if (newTime !== old.time)         changes.push('Time');
+      if (newAddress !== old.address)   changes.push('Address');
+      if (svcLabel !== old.svcLabel)    changes.push('Service');
+      if (addonsLine !== old.addonsLine) changes.push('Add-Ons');
+      if (Number(finalPrice) !== Number(old.finalPrice)) changes.push('Price');
+      const changesLine = changes.length ? changes.join(', ') : 'Booking details';
+
+      const notifyHtml = emailWrap(
+        '<h2 style="color:#0F1C35">Inspection Details Updated</h2>'
+        + '<p>Hi ' + escapeHtml(newBuyer.firstName) + ', we wanted to let you know we have updated your inspection. The current details are below:</p>'
+        + '<p style="color:#888;font-size:.85rem"><strong style="color:#1B2D52">What changed:</strong> ' + escapeHtml(changesLine) + '</p>'
+        + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+        + '<tr><td style="padding:6px 0;color:#888;width:130px">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + (newAddons.length ? ' + ' + escapeHtml(addonsLine) : '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(newTime) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(newAddress) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Est. Total</td><td style="color:#C9A84C;font-weight:700">$' + (Number(finalPrice)||0) + (tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
+        + '</table>'
+        + (hubUrl
+            ? '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:14px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
+              + '<p style="margin:0 0 10px;font-size:.88rem;color:#1B2D52"><strong>Your Inspection Hub</strong> has the latest details:</p>'
+              + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
+              + '</div>'
+            : '')
+        + '<p>If anything looks wrong or you have questions, please call or text <strong>(480) 618-0805</strong>.</p>'
+      );
+
+      await sendEmail(
+        newBuyer.email,
+        'Inspection Updated — ' + dateFmt + ' @ ' + newTime + ' [' + confId + ']',
+        notifyHtml
+      );
+      notified = true;
+    } catch(e) {
+      console.error('Notify client email failed:', e.message);
+    }
+  }
+
+  res.json({ success: true, notified });
 });
 
 // ── START ─────────────────────────────────────────────────────
