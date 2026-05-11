@@ -10,6 +10,76 @@ const rateLimit  = require('express-rate-limit');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const { Pool }   = require('pg');
+const crypto     = require('crypto');
+
+// ── HMAC LINK SIGNING ─────────────────────────────────────────
+// Adds an ?s= query param to action URLs (confirm/cancel/agreement).
+// Token by itself is already a UUID, so guessing is infeasible — the HMAC
+// is defense in depth against token exfiltration (DB leak, backup compromise).
+// Without our secret, an attacker holding a leaked token still can't construct
+// a working URL.
+//
+// Graceful migration: links sent BEFORE this code shipped have no signature.
+// verifySignedToken accepts them (legacy path, logs a warning) so live pending
+// emails still work. After ~14 days you can flip LINK_HMAC_STRICT=true to
+// require signatures on all incoming requests.
+const LINK_HMAC_SECRET = process.env.LINK_HMAC_SECRET || process.env.ADMIN_PASSWORD || 'change-me';
+if (!process.env.LINK_HMAC_SECRET) {
+  console.warn('⚠️  LINK_HMAC_SECRET not set — falling back to ADMIN_PASSWORD. Set a dedicated 32+ char random value in Railway env vars.');
+}
+const LINK_HMAC_STRICT = String(process.env.LINK_HMAC_STRICT || '').toLowerCase() === 'true';
+
+function signToken(token) {
+  // 12 hex chars = 48 bits of entropy on top of an already-unguessable UUID.
+  // Short enough to keep URLs reasonable; long enough that brute force is impractical.
+  return crypto.createHmac('sha256', LINK_HMAC_SECRET).update(String(token)).digest('hex').slice(0, 12);
+}
+
+function verifySignedToken(token, providedSig) {
+  if (!token) return { ok: false, reason: 'missing-token' };
+  if (!providedSig) {
+    // Legacy path — link issued before HMAC shipped, or someone hand-crafted a URL.
+    if (LINK_HMAC_STRICT) return { ok: false, reason: 'missing-sig' };
+    return { ok: true, legacy: true };
+  }
+  const expected = signToken(token);
+  // timingSafeEqual requires equal-length buffers
+  const a = Buffer.from(providedSig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return { ok: false, reason: 'sig-mismatch' };
+  try {
+    if (crypto.timingSafeEqual(a, b)) return { ok: true };
+  } catch (_) {}
+  return { ok: false, reason: 'sig-mismatch' };
+}
+
+// Helper: append signed query param to a URL.
+function withSig(url, token) {
+  const sep = url.indexOf('?') === -1 ? '?' : '&';
+  return url + sep + 's=' + signToken(token);
+}
+
+// ── INPUT VALIDATION ──────────────────────────────────────────
+// Server-side regex checks for email and phone format. Booking form validates
+// in the browser, but the server takes whatever it's given — these guard the
+// API endpoints against malformed values from custom scripts or bypassed forms.
+
+function isValidEmail(s) {
+  if (!s || typeof s !== 'string') return false;
+  if (s.length > 254) return false;  // RFC 5321 hard limit
+  // Permissive but practical: local@domain.tld, no spaces, no double-dot
+  // shenanigans, no leading/trailing punctuation around the @.
+  return /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(s) && !/\.\./.test(s);
+}
+
+function isValidPhone(s) {
+  if (!s || typeof s !== 'string') return false;
+  // Strip everything that isn't a digit; require 10 or 11 digits (US format,
+  // with or without the leading 1). Permissive on input formatting since
+  // users type these many different ways.
+  const digits = s.replace(/\D/g, '');
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -693,7 +763,7 @@ label input{margin-top:3px;flex-shrink:0;width:16px;height:16px;}
 
     ${error ? '<div class="error">' + escapeHtml(error) + '</div>' : ''}
 
-    <form method="POST" action="/agreement/${encodeURIComponent(token)}/sign" id="agreementForm">
+    <form method="POST" action="/agreement/${encodeURIComponent(token)}/sign?s=${encodeURIComponent(signToken(token))}" id="agreementForm">
       <label>
         <input type="checkbox" id="readCheck" required/>
         I have read and understand the full agreement above
@@ -1107,6 +1177,18 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   // Buyer's agent is OPTIONAL — no validation
   if(miss.length) return res.status(400).json({ error:'Missing: '+miss.join(', ') });
 
+  // Format validation — server-side regex on email + phone fields. Browser
+  // already validates these, but the server takes whatever it's given.
+  if (!isValidEmail(buyer.email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (!isValidPhone(buyer.phone)) return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  if (buyerAgent && buyerAgent.email && !isValidEmail(buyerAgent.email))   return res.status(400).json({ error: "Buyer's agent email looks invalid." });
+  if (buyerAgent && buyerAgent.phone && !isValidPhone(buyerAgent.phone))   return res.status(400).json({ error: "Buyer's agent phone looks invalid." });
+  if (sellerAgent && sellerAgent.email && !isValidEmail(sellerAgent.email)) return res.status(400).json({ error: "Seller's agent email looks invalid." });
+  if (sellerAgent && sellerAgent.phone && !isValidPhone(sellerAgent.phone)) return res.status(400).json({ error: "Seller's agent phone looks invalid." });
+  for (const e of extraEmails) {
+    if (!isValidEmail(e)) return res.status(400).json({ error: 'Extra recipient "' + e + '" is not a valid email.' });
+  }
+
   // ── SERVER-SIDE PRICING (authoritative) ──────────────────────
   // Recompute from authoritative tables. Ignore client-sent totalPrice entirely.
   const priced = computePrice({ sqft, yearBuilt, addons, date, time });
@@ -1225,8 +1307,8 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   }
 
   const BASE_URL   = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
-  const confirmUrl = BASE_URL + '/confirm/' + token;
-  const cancelUrl  = BASE_URL + '/cancel/'  + token;
+  const confirmUrl = withSig(BASE_URL + '/confirm/' + token, token);
+  const cancelUrl  = withSig(BASE_URL + '/cancel/'  + token, token);
 
   const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + escapeHtml(sellerAgent.name) + (sellerAgent.brokerage ? ' — ' + escapeHtml(sellerAgent.brokerage) : '') + '<br>Phone: ' + escapeHtml(sellerAgent.phone||'—') + '</p>' : '';
   const tripLineOwner      = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + Number(trip.miles||0) + ' miles)</p>' : '';
@@ -1264,6 +1346,15 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
 
 // ── CONFIRM BOOKING ───────────────────────────────────────────
 app.get('/confirm/:token', async function(req, res) {
+  // Verify HMAC signature before doing any DB work. Owner-facing endpoint so
+  // we can be terse on failure.
+  const sigCheck = verifySignedToken(req.params.token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Confirm link rejected: ' + sigCheck.reason);
+    return res.status(403).send('<h2>Invalid or expired link. Check your email for the original confirmation message, or call (480) 618-0805.</h2>');
+  }
+  if (sigCheck.legacy) console.warn('Confirm: accepting legacy unsigned token (pre-HMAC migration)');
+
   let booking;
   try {
     // Atomically claim the booking — if a previous click already claimed it, this returns null.
@@ -1332,7 +1423,7 @@ app.get('/confirm/:token', async function(req, res) {
   // Generate agreement token for this confirmed booking
   const agreeToken = uuidv4();
   const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
-  const agreementUrl = BASE_URL + '/agreement/' + agreeToken;
+  const agreementUrl = withSig(BASE_URL + '/agreement/' + agreeToken, agreeToken);
 
   // Store agreement token temporarily so we can look up booking from it
   try {
@@ -1545,6 +1636,13 @@ td:last-child{color:#2C2C2C;font-weight:600;}
 // Show agreement page
 app.get('/agreement/:token', agreementLimiter, async function(req, res) {
   const token = req.params.token;
+  const sigCheck = verifySignedToken(token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Agreement GET rejected: ' + sigCheck.reason);
+    return res.status(403).send('<h2>Invalid or expired link. Please call (480) 618-0805 if you need to sign your agreement.</h2>');
+  }
+  if (sigCheck.legacy) console.warn('Agreement GET: accepting legacy unsigned token');
+
   let booking;
   try {
     booking = await dbGet('agree_' + token);
@@ -1575,6 +1673,15 @@ app.get('/agreement/:token', agreementLimiter, async function(req, res) {
 // Process signature
 app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
   const token = req.params.token;
+
+  // HMAC check first — block forged sign-as posts before any work or DB read.
+  const sigCheck = verifySignedToken(token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Agreement POST rejected: ' + sigCheck.reason);
+    return res.status(403).send('<h2>Invalid or expired link. Please call (480) 618-0805 if you need to sign your agreement.</h2>');
+  }
+  if (sigCheck.legacy) console.warn('Agreement POST: accepting legacy unsigned token');
+
   const signature = (req.body.signature || '').trim();
 
   if (!signature) {
@@ -1692,6 +1799,13 @@ app.get('/api/agreement-status/:confId', async function(req, res) {
 
 // ── CANCEL BOOKING ────────────────────────────────────────────
 app.get('/cancel/:token', async function(req, res) {
+  const sigCheck = verifySignedToken(req.params.token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Cancel link rejected: ' + sigCheck.reason);
+    return res.status(403).send('<h2>Invalid or expired link. Check your email for the original confirmation message, or call (480) 618-0805.</h2>');
+  }
+  if (sigCheck.legacy) console.warn('Cancel: accepting legacy unsigned token (pre-HMAC migration)');
+
   let booking;
   try {
     booking = await dbGet(req.params.token);
@@ -1723,6 +1837,8 @@ app.get('/auth/google/callback', async function(req, res) {
 app.post('/api/contact', rescheduleLimiter, async function(req, res) {
   let { name, phone, email, role, message } = req.body;
   if (!name || !email || !message) return res.status(400).json({ error: 'Name, email, and message are required.' });
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (phone && !isValidPhone(phone)) return res.status(400).json({ error: 'Please enter a valid phone number (or leave it blank).' });
 
   // Clip lengths
   name    = clip(name,    LEN.name);
@@ -1763,6 +1879,8 @@ app.post('/api/contact', rescheduleLimiter, async function(req, res) {
 app.post('/api/reschedule', rescheduleLimiter, async function(req, res) {
   let { confId, name, phone, email, message } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email required.' });
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (phone && !isValidPhone(phone)) return res.status(400).json({ error: 'Please enter a valid phone number (or leave it blank).' });
 
   // Clip lengths to prevent DB bloat / oversized emails
   confId  = clip(confId,  LEN.code);
