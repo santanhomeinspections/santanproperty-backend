@@ -608,6 +608,34 @@ async function downloadFromR2(key) {
   return Buffer.concat(chunks);
 }
 
+// Download from the inspector's R2. Both apps may share an R2 account (same
+// endpoint + credentials, possibly different bucket), or they may use entirely
+// separate R2 accounts. Each piece is independently overridable:
+//   INSPECTOR_R2_ENDPOINT          — falls back to R2_ENDPOINT
+//   INSPECTOR_R2_ACCESS_KEY_ID     — falls back to R2_ACCESS_KEY_ID
+//   INSPECTOR_R2_SECRET_ACCESS_KEY — falls back to R2_SECRET_ACCESS_KEY
+//   INSPECTOR_R2_BUCKET_NAME       — falls back to R2_BUCKET_NAME
+// In the common case where the two apps share one R2 account and one bucket,
+// no env vars need to be set. If they share an R2 account but use different
+// buckets, only INSPECTOR_R2_BUCKET_NAME needs to be set. If the inspector
+// uses an entirely separate R2 account, set all four.
+async function downloadFromInspectorR2(key) {
+  const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+  const client = new S3Client({
+    region: 'auto',
+    endpoint: process.env.INSPECTOR_R2_ENDPOINT || process.env.R2_ENDPOINT,
+    credentials: {
+      accessKeyId:     process.env.INSPECTOR_R2_ACCESS_KEY_ID     || process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.INSPECTOR_R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  const bucket = process.env.INSPECTOR_R2_BUCKET_NAME || process.env.R2_BUCKET_NAME;
+  const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const chunks = [];
+  for await (const chunk of result.Body) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
 // ── AGREEMENT TEXT ────────────────────────────────────────────
 // Versioned agreement text — stored with each signed record
 const AGREEMENT_VERSION = '2026-v2';
@@ -813,11 +841,16 @@ document.getElementById('agreementForm').addEventListener('submit', function(e) 
 //
 // `row` is the raw confirmed_bookings row (paid_at, agreement_signed_at, etc.).
 // `booking` is row.data (the JSONB payload — confId, dateFmt, address, etc.).
-// `reportState` is one of: 'none' | 'pending' | 'completed' | 'delivered'.
+// `reportInfo` is the object returned by getReportInfoForConfId — {state, id, pdfKey, pdfFilename, version}.
 // `hubToken` is the agreement token (also used as the hub token).
-function buildHubPage(booking, row, reportState, hubToken) {
+function buildHubPage(booking, row, reportInfo, hubToken) {
+  const reportState = (reportInfo && reportInfo.state) || 'none';
   const { confId, address, dateFmt, time, endTime, svcLabel, addonsLine, finalPrice, fullName, buyer } = booking;
   const buyerFirst = (buyer && buyer.firstName) || (fullName ? String(fullName).split(' ')[0] : 'there');
+
+  // Owner first name — used in "Jaren will reach out" copy. Pulls from OWNER_NAME
+  // env var to stay consistent if the owner ever changes; falls back to "Jaren".
+  const ownerFirst = (process.env.OWNER_NAME || 'Jaren').split(' ')[0];
 
   const isCancelled    = !!(row && row.cancelled_at);
   const isSigned       = !!(row && row.agreement_signed_at);
@@ -882,7 +915,7 @@ function buildHubPage(booking, row, reportState, hubToken) {
   if (!isCancelled && !inspectionPast) {
     rescheduleSection = '<div class="section">'
       + '<h2>Need to Reschedule?</h2>'
-      + '<p class="muted">Fill out the form below and Jaren will reach out to find a new time. For same-day changes, please call (480) 618-0805.</p>'
+      + '<p class="muted">Fill out the form below and ' + escapeHtml(ownerFirst) + ' will reach out to find a new time. For same-day changes, please call (480) 618-0805.</p>'
       + '<form id="rescheduleForm" method="POST" action="/api/reschedule">'
       + '<input type="hidden" name="confId" value="' + escapeHtml(confId) + '"/>'
       + '<input type="hidden" name="name" value="' + escapeHtml(fullName || '') + '"/>'
@@ -899,10 +932,23 @@ function buildHubPage(booking, row, reportState, hubToken) {
   let reportSection = '';
   if (!isCancelled) {
     if (reportState === 'delivered') {
+      // Build a download URL only if we have a PDF key on file. Older reports
+      // delivered before the inspector tracked pdf_r2_key won't have one — in
+      // that case we just say "check your email" without a download button.
+      const hasPdf = !!(reportInfo && reportInfo.pdfKey);
+      const dlUrl = hasPdf
+        ? '/i/' + encodeURIComponent(hubToken) + '/report.pdf?s=' + encodeURIComponent(signToken(hubToken))
+        : null;
+      const amendmentNote = (reportInfo && reportInfo.version && reportInfo.version > 1)
+        ? '<p class="muted" style="margin-top:6px">This is the most recent version of your report (v' + reportInfo.version + ').</p>'
+        : '';
       reportSection = '<div class="section section-good">'
         + '<h2>Your Report</h2>'
         + '<p>Your inspection report has been delivered to <strong>' + escapeHtml((buyer && buyer.email) || 'your email') + '</strong>.</p>'
-        + '<p class="muted">If you can\'t find it, check your spam folder, or call/text (480) 618-0805 and we will resend.</p>'
+        + (dlUrl
+            ? '<a href="' + escapeHtml(dlUrl) + '" class="btn btn-primary" target="_blank" rel="noopener">Download Report (PDF)</a>'
+            : '<p class="muted">If you can\'t find it, check your spam folder, or call/text (480) 618-0805 and we will resend.</p>')
+        + amendmentNote
         + '</div>';
     } else if (inspectionPast) {
       reportSection = '<div class="section">'
@@ -1030,7 +1076,7 @@ textarea:focus{border-color:#C9A84C;}
     .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
     .then(function(res){
       if (res.ok && res.data.success) {
-        result.textContent = 'Request sent. Jaren will reach out shortly.';
+        result.textContent = 'Request sent. ${ownerFirst.replace(/'/g, "\\\\'")} will reach out shortly.';
         result.className = 'form-result ok';
         form.querySelector('textarea').value = '';
         btn.textContent = 'Sent ✓';
@@ -1056,32 +1102,58 @@ textarea:focus{border-color:#C9A84C;}
 </html>`;
 }
 
-// Look up a delivered-report status for a given confirmation ID by querying the
-// inspector app's `reports` table (shared Postgres). Returns one of:
-//   'none'       — no report row exists yet
-//   'pending'    — report row exists but not delivered
-//   'completed'  — report row + completed_at set, not yet delivered
-//   'delivered'  — report has been delivered to client
+// Look up report info for a given confirmation ID from the inspector app's
+// `reports` table (shared Postgres). Returns:
+//   {
+//     state:        'none' | 'in_progress' | 'pending' | 'delivered',
+//     id:           UUID of report row (or null)
+//     pdfKey:       R2 key of latest PDF (or null)
+//     pdfFilename:  filename to suggest on download (or null)
+//     version:      report_version (1+, or null)
+//   }
+// State semantics:
+//   'none'        — no report row exists for this confId
+//   'in_progress' — row exists but inspector hasn't finalized it yet
+//   'pending'     — row is 'complete' but report_sent_at is unset (rare)
+//   'delivered'   — report_sent_at is present (the client got the report)
 //
-// Defensive: if the reports table doesn't exist, or column names differ from
-// what we assume, returns 'none' and the hub falls back to time-based logic
-// (inspection-past → "delivered shortly"). No deploy dependency on inspector schema.
-async function getReportStatusForConfId(confId) {
-  if (!confId) return 'none';
+// Defensive: if the reports table doesn't exist or the query throws, returns
+// {state:'none', ...}. The hub and admin row both handle missing reports
+// gracefully (no buttons render), so a schema mismatch degrades politely.
+async function getReportInfoForConfId(confId) {
+  if (!confId) return { state: 'none', id: null, pdfKey: null, pdfFilename: null, version: null };
   try {
+    // Order by report_version DESC so we pick the latest amendment, then by
+    // created_at as a tiebreaker. NULLS LAST keeps very-old rows that pre-date
+    // the report_version column from outranking newer versioned rows.
     const r = await pool.query(
-      `SELECT delivered_at FROM reports
+      `SELECT id, status, report_version,
+              report_data->>'report_sent_at' AS sent_at,
+              report_data->>'pdf_r2_key' AS pdf_key,
+              report_data->>'pdf_filename' AS pdf_filename
+         FROM reports
         WHERE report_data->>'confId' = $1
-        ORDER BY id DESC LIMIT 1`,
+        ORDER BY report_version DESC NULLS LAST, created_at DESC
+        LIMIT 1`,
       [confId]
     );
-    if (!r.rows.length) return 'none';
-    if (r.rows[0].delivered_at) return 'delivered';
-    return 'pending';
+    if (!r.rows.length) return { state: 'none', id: null, pdfKey: null, pdfFilename: null, version: null };
+    const row = r.rows[0];
+    let state;
+    if (row.sent_at) state = 'delivered';
+    else if (row.status === 'complete') state = 'pending';
+    else state = 'in_progress';
+    return {
+      state,
+      id: row.id,
+      pdfKey: row.pdf_key || null,
+      pdfFilename: row.pdf_filename || null,
+      version: row.report_version || null,
+    };
   } catch(e) {
-    // Table may not exist on first run, or column names may differ.
-    // Don't spam the log — just return 'none' so the hub falls back gracefully.
-    return 'none';
+    // Table may not exist on a fresh deploy, or column shapes may differ.
+    // Don't spam the log — just return 'none' so the UI degrades gracefully.
+    return { state: 'none', id: null, pdfKey: null, pdfFilename: null, version: null };
   }
 }
 
@@ -2105,9 +2177,117 @@ app.get('/i/:token', agreementLimiter, async function(req, res) {
   }
 
   const booking = row.data || {};
-  const reportState = await getReportStatusForConfId(booking.confId);
+  const reportInfo = await getReportInfoForConfId(booking.confId);
 
-  res.send(buildHubPage(booking, row, reportState, token));
+  res.send(buildHubPage(booking, row, reportInfo, token));
+});
+
+// ── CUSTOMER HUB: REPORT PDF DOWNLOAD ─────────────────────────
+// Token-authed download of the latest report PDF. Same token + sig as the
+// hub page itself. Returns 404 if no report exists yet or it isn't delivered —
+// we don't leak the existence of in-progress reports to the client side.
+app.get('/i/:token/report.pdf', agreementLimiter, async function(req, res) {
+  const token = req.params.token;
+  const sigCheck = verifySignedToken(token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Hub PDF link rejected: ' + sigCheck.reason);
+    return res.status(403).send('Invalid or expired link.');
+  }
+
+  let row;
+  try {
+    const r = await pool.query(
+      `SELECT data, cancelled_at FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
+      [token]
+    );
+    row = r.rows[0];
+  } catch(e) {
+    return res.status(500).send('Database error.');
+  }
+  if (!row || row.cancelled_at) return res.status(404).send('Not found.');
+
+  const confId = row.data && row.data.confId;
+  const info   = await getReportInfoForConfId(confId);
+
+  // Only allow client downloads of *delivered* reports — keeps in-progress
+  // and pending-but-unsent reports private to the inspector.
+  if (info.state !== 'delivered' || !info.pdfKey) return res.status(404).send('Report not yet available.');
+
+  try {
+    const pdf = await downloadFromInspectorR2(info.pdfKey);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="' + (info.pdfFilename || 'report.pdf').replace(/[^a-zA-Z0-9._-]/g,'_') + '"');
+    res.send(pdf);
+  } catch(e) {
+    console.error('Hub PDF download error:', e.message);
+    // Most likely cause is INSPECTOR_R2_BUCKET_NAME mismatch.
+    return res.status(500).send('Could not retrieve report. Please call (480) 618-0805.');
+  }
+});
+
+// ── ADMIN: REPORT PDF STREAM ──────────────────────────────────
+// Stream the latest report PDF for a confirmation ID. Used by the admin
+// dashboard "View Report" button. Works for any report state — admin can
+// peek at in-progress reports too.
+app.get('/admin/report-pdf/:confId', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) {
+    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const info = await getReportInfoForConfId(req.params.confId);
+  if (!info.id || !info.pdfKey) return res.status(404).send('No report PDF on file for ' + escapeHtml(req.params.confId) + '. The inspector may not have generated one yet.');
+  try {
+    const pdf = await downloadFromInspectorR2(info.pdfKey);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="' + (info.pdfFilename || 'report.pdf').replace(/[^a-zA-Z0-9._-]/g,'_') + '"');
+    res.send(pdf);
+  } catch(e) {
+    console.error('Admin report PDF download error:', e.message);
+    return res.status(500).send('R2 fetch failed: ' + escapeHtml(e.message) + '. If this persists, set INSPECTOR_R2_BUCKET_NAME on the website Railway service to whatever bucket the inspector uses.');
+  }
+});
+
+// ── ADMIN: REPORT INFO LOOKUP ─────────────────────────────────
+// Lightweight JSON endpoint used by the admin dashboard JS to decide which
+// "View Report" / "Edit in Inspector" buttons to render per row. We don't
+// want to widen /admin/data with a per-row LEFT JOIN on reports (it would
+// run on every dashboard refresh), so the dashboard fetches this once and
+// caches the result for the session.
+app.get('/admin/reports-map', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const r = await pool.query(
+      `SELECT id,
+              report_data->>'confId' AS conf_id,
+              report_data->>'pdf_r2_key' AS pdf_key,
+              report_data->>'report_sent_at' AS sent_at,
+              status,
+              report_version
+         FROM reports
+        WHERE report_data->>'confId' IS NOT NULL`
+    );
+    // Build a confId-keyed map. If a confId somehow has multiple report rows
+    // (shouldn't happen but defensive), keep the latest by version then status.
+    const map = {};
+    for (const row of r.rows) {
+      const existing = map[row.conf_id];
+      const candidate = {
+        id: row.id,
+        hasPdf: !!row.pdf_key,
+        delivered: !!row.sent_at,
+        status: row.status,
+        version: row.report_version || 1,
+      };
+      if (!existing || candidate.version > existing.version) {
+        map[row.conf_id] = candidate;
+      }
+    }
+    res.json({ reports: map });
+  } catch(e) {
+    // Table may not exist (fresh deploy before inspector schema is set up).
+    // Return empty so the dashboard renders fine with no report buttons.
+    res.json({ reports: {} });
+  }
 });
 
 // ── CANCEL BOOKING ────────────────────────────────────────────
@@ -2353,8 +2533,19 @@ function esc(s) {
 
 async function load() {
   try {
-    const r = await fetch('/admin/data');
+    // Fetch dashboard data + reports map in parallel. The reports map is keyed
+    // by confId and tells us which bookings have a report (and which are delivered),
+    // so we can render View Report / Edit in Inspector buttons accordingly.
+    const [r, rm] = await Promise.all([
+      fetch('/admin/data'),
+      fetch('/admin/reports-map').catch(function(){ return null; }),
+    ]);
     const d = await r.json();
+    const reportsMap = (rm && rm.ok) ? (await rm.json()).reports || {} : {};
+    const INSPECTOR_URL = ${JSON.stringify(process.env.INSPECTOR_URL || '')};
+    // Default empty = link goes straight to INSPECTOR_URL home. Set to e.g.
+    // "/?edit={id}" or "/#/reports/{id}" later if the inspector adds a deep-link handler.
+    const INSPECTOR_EDIT_PATH_TPL = ${JSON.stringify(process.env.INSPECTOR_EDIT_PATH_TPL || '')};
 
     const totalRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
     const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
@@ -2424,12 +2615,31 @@ async function load() {
           ? '<button data-action="hard-delete" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Delete</button>'
           : '<button data-action="cancel" data-id="'+bd.confId+'" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px">Cancel</button>';
         const editLink = '<a href="/admin/booking/'+encodeURIComponent(bd.confId)+'" target="_blank" style="background:none;color:#C9A84C;border:1px solid #C9A84C;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px;text-decoration:none;display:inline-block">Edit</a>';
+
+        // Report-related buttons. These only render when reportsMap has an
+        // entry for this confId — i.e. the inspector has at least started a
+        // report. View Report needs a PDF on file; Edit in Inspector needs
+        // INSPECTOR_URL configured. Each button is mutually independent.
+        const ri = reportsMap[bd.confId];
+        let reportBtns = '';
+        if (ri) {
+          if (ri.hasPdf) {
+            const viewLabel = ri.delivered
+              ? 'View Report' + (ri.version > 1 ? ' v' + ri.version : '')
+              : 'Preview Report (Draft)';
+            reportBtns += '<a href="/admin/report-pdf/'+encodeURIComponent(bd.confId)+'" target="_blank" style="background:'+(ri.delivered?'#1ab464':'#243660')+';color:'+(ri.delivered?'#fff':'#C9A84C')+';border:1px solid '+(ri.delivered?'#1ab464':'#C9A84C')+';border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px;text-decoration:none;display:inline-block;font-weight:'+(ri.delivered?'700':'400')+'">'+viewLabel+'</a>';
+          }
+          if (INSPECTOR_URL && ri.id) {
+            const editUrl = INSPECTOR_URL.replace(/\\/$/, '') + INSPECTOR_EDIT_PATH_TPL.replace('{id}', encodeURIComponent(ri.id));
+            reportBtns += '<a href="'+editUrl+'" target="_blank" style="background:none;color:#8A9AB5;border:1px solid #344870;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;margin-left:4px;text-decoration:none;display:inline-block">Edit in Inspector</a>';
+          }
+        }
         return '<tr>' +
           '<td><div class="conf">'+esc(bd.confId)+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
           '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
-          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+editLink+cancelBtn+'</div></td>' +
+          '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+editLink+cancelBtn+'</div>'+(reportBtns?'<div style="margin-top:2px">'+reportBtns+'</div>':'')+'</td>' +
           '</tr>';
       }).join('');
       document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -3267,11 +3477,26 @@ app.get('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
     ? '/i/' + encodeURIComponent(d.agreementToken) + '?s=' + encodeURIComponent(signToken(d.agreementToken))
     : null;
 
+  // Pull report info for this booking — used to render View Report / Edit in Inspector
+  // links at the top of the edit page. Defensive: returns {state:'none', ...} on miss.
+  const reportInfo = await getReportInfoForConfId(confId);
+  const inspectorBase = (process.env.INSPECTOR_URL || '').replace(/\/$/, '');
+  const inspectorTpl  = process.env.INSPECTOR_EDIT_PATH_TPL || '';
+  const inspectorEditUrl = (inspectorBase && reportInfo.id)
+    ? inspectorBase + inspectorTpl.replace('{id}', encodeURIComponent(reportInfo.id))
+    : null;
+
   // Pre-build conditional status badges (avoid backtick-in-template quoting)
   const badgeCancelled = isCancelled ? '<span class="status-tag tag-bad">Cancelled</span>' : '';
   const badgeSigned    = isSigned    ? '<span class="status-tag tag-good">Signed</span>' : '<span class="status-tag tag-warn">Unsigned</span>';
   const badgePaid      = isPaid      ? '<span class="status-tag tag-good">Paid' + (paymentMethod ? ' · ' + escapeHtml(paymentMethod) : '') + '</span>' : '<span class="status-tag tag-warn">Unpaid</span>';
   const hubLink        = hubUrl ? '<a href="' + escapeHtml(hubUrl) + '" target="_blank" class="status-link">View customer hub →</a>' : '';
+  const reportLink     = (reportInfo.state !== 'none' && reportInfo.pdfKey)
+    ? '<a href="/admin/report-pdf/' + encodeURIComponent(confId) + '" target="_blank" class="status-link" style="color:' + (reportInfo.state === 'delivered' ? '#1ab464' : '#C9A84C') + '">' + (reportInfo.state === 'delivered' ? 'View Report' + (reportInfo.version > 1 ? ' v' + reportInfo.version : '') : 'Preview Report (Draft)') + ' →</a>'
+    : '';
+  const inspectorLink  = inspectorEditUrl
+    ? '<a href="' + escapeHtml(inspectorEditUrl) + '" target="_blank" class="status-link">Edit in Inspector →</a>'
+    : '';
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -3348,6 +3573,8 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       ${badgeSigned}
       ${badgePaid}
       ${hubLink}
+      ${reportLink}
+      ${inspectorLink}
     </div>
   </div>
 
