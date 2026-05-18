@@ -897,10 +897,19 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
     const signedDate = row.agreement_signed_at
       ? new Date(row.agreement_signed_at).toLocaleString('en-US', { timeZone: TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })
       : '';
+    // Pick the most authoritative PDF we have: counter-signed (executed) beats
+    // single-signed if both exist. The hub returns whichever is present.
+    // The download URL is the same /agreement.pdf endpoint either way; it picks
+    // the best PDF server-side.
+    const hasAgreementPdf = !!(row.agreement_pdf_key || row.counter_signed_pdf_key);
+    const dlUrl = hasAgreementPdf
+      ? '/i/' + encodeURIComponent(hubToken) + '/agreement.pdf?s=' + encodeURIComponent(signToken(hubToken))
+      : null;
     agreementSection = '<div class="section">'
       + '<h2>Agreement</h2>'
       + '<p class="muted">Signed ' + escapeHtml(signedDate) + ' (AZ)' + (isCounterSigned ? ' &middot; fully executed' : '') + '</p>'
       + '<div class="status-pill status-good">✓ Signed</div>'
+      + (dlUrl ? '<div style="margin-top:14px"><a href="' + escapeHtml(dlUrl) + '" class="btn btn-secondary" target="_blank" rel="noopener">Download Signed Agreement (PDF)</a></div>' : '')
       + '</div>';
   } else {
     agreementSection = '<div class="section section-action">'
@@ -2180,6 +2189,53 @@ app.get('/i/:token', agreementLimiter, async function(req, res) {
   const reportInfo = await getReportInfoForConfId(booking.confId);
 
   res.send(buildHubPage(booking, row, reportInfo, token));
+});
+
+// ── CUSTOMER HUB: AGREEMENT PDF DOWNLOAD ──────────────────────
+// Token-authed download of the signed inspection agreement. Same HMAC sig as
+// the hub page. Returns the counter-signed (executed) PDF if available,
+// otherwise the single-signed PDF. 404 if no agreement is on file.
+//
+// Why this exists: clients sometimes lose their original confirmation email
+// and need their agreement again. Without this route they'd have to email
+// Jaren to ask for a copy. The hub now self-serves it.
+app.get('/i/:token/agreement.pdf', agreementLimiter, async function(req, res) {
+  const token = req.params.token;
+  const sigCheck = verifySignedToken(token, req.query.s);
+  if (!sigCheck.ok) {
+    console.warn('Hub agreement PDF link rejected: ' + sigCheck.reason);
+    return res.status(403).send('Invalid or expired link.');
+  }
+
+  let row;
+  try {
+    const r = await pool.query(
+      `SELECT conf_id, agreement_pdf_key, counter_signed_pdf_key, cancelled_at
+         FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
+      [token]
+    );
+    row = r.rows[0];
+  } catch(e) {
+    return res.status(500).send('Database error.');
+  }
+  if (!row || row.cancelled_at) return res.status(404).send('Not found.');
+
+  // Prefer the counter-signed (executed) PDF — it's the most authoritative
+  // version. Falls back to the buyer-signed-only PDF if counter-sign hasn't
+  // happened yet.
+  const key = row.counter_signed_pdf_key || row.agreement_pdf_key;
+  const isExecuted = !!row.counter_signed_pdf_key;
+  if (!key) return res.status(404).send('No signed agreement on file yet.');
+
+  try {
+    const pdf = await downloadFromR2(key);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="' + row.conf_id + '-' + (isExecuted ? 'executed-' : '') + 'agreement.pdf"');
+    res.send(pdf);
+  } catch(e) {
+    console.error('Hub agreement PDF download error:', e.message);
+    return res.status(500).send('Could not retrieve agreement. Please call (480) 618-0805.');
+  }
 });
 
 // ── CUSTOMER HUB: REPORT PDF DOWNLOAD ─────────────────────────
@@ -3766,6 +3822,22 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       </div>
     </div>
   </form>
+
+  <!-- Communication card sits OUTSIDE the edit form so its button doesn't trip
+       the form's submit handler. Self-contained: clicking Resend hits a
+       separate endpoint and shows its own success/error flash. -->
+  <div class="card">
+    <h3>Communication</h3>
+    <p style="color:#8A9AB5;font-size:.86rem;line-height:1.5;margin-bottom:14px;">
+      ${escapeHtml(((d.buyer && d.buyer.email) || 'No email on file'))} ·
+      ${escapeHtml(((d.buyer && d.buyer.phone) || 'No phone on file'))}
+    </p>
+    <button type="button" id="resendHubBtn" class="btn-secondary" style="background:#243660;color:#C9A84C;border:1px solid #C9A84C;">
+      ✉ Resend Hub Link to Client
+    </button>
+    <div id="resendFlash" style="margin-top:12px;"></div>
+    <div class="hint" style="margin-top:10px;">Sends a fresh email to the buyer with the link to their inspection hub. Use this if a client lost their original confirmation email.</div>
+  </div>
 </div>
 
 <script>
@@ -3811,6 +3883,41 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       btn.textContent = 'Save Changes';
     });
   });
+
+  // Resend Hub Link handler — separate from the form submit so it doesn't
+  // accidentally trigger a save. Self-contained: posts to its own endpoint,
+  // shows its own flash inside the Communication card.
+  var resendBtn = document.getElementById('resendHubBtn');
+  if (resendBtn) {
+    resendBtn.addEventListener('click', function() {
+      var resendFlash = document.getElementById('resendFlash');
+      resendBtn.disabled = true;
+      var origText = resendBtn.textContent;
+      resendBtn.textContent = 'Sending...';
+      resendFlash.innerHTML = '';
+      fetch(form.action + '/resend-hub-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+      .then(function(res){
+        if (res.ok && res.data.success) {
+          resendFlash.innerHTML = '<div class="flash flash-ok">Sent to ' + res.data.sentTo + '</div>';
+          resendBtn.textContent = 'Sent ✓';
+          setTimeout(function(){ resendBtn.disabled = false; resendBtn.textContent = origText; }, 3000);
+        } else {
+          resendFlash.innerHTML = '<div class="flash flash-bad">' + ((res.data && res.data.error) || 'Send failed.') + '</div>';
+          resendBtn.disabled = false;
+          resendBtn.textContent = origText;
+        }
+      })
+      .catch(function(err){
+        resendFlash.innerHTML = '<div class="flash flash-bad">Network error: ' + err.message + '</div>';
+        resendBtn.disabled = false;
+        resendBtn.textContent = origText;
+      });
+    });
+  }
 })();
 </script>
 </body>
@@ -3823,6 +3930,68 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
 // - Reruns trip-charge/mileage if address changed
 // - Updates Google Calendar event if date/time/address/service changed
 // - Optionally sends client an "updated" email when notifyClient=1
+// ── ADMIN: RESEND HUB LINK ────────────────────────────────────
+// Re-emails the customer their hub URL. Used when a client says they lost
+// their confirmation email or can't find the hub link. Idempotent — can be
+// triggered as many times as needed; no DB state changes.
+app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const confId = req.params.confId;
+
+  let row;
+  try {
+    const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    row = r.rows[0];
+  } catch(e) {
+    return res.status(500).json({ error: 'DB read failed: ' + e.message });
+  }
+
+  if (row.cancelled_at) return res.status(400).json({ error: 'Booking is cancelled.' });
+
+  const d = row.data || {};
+  const buyer = d.buyer || {};
+  if (!buyer.email) return res.status(400).json({ error: 'Buyer has no email on file.' });
+  if (!d.agreementToken) return res.status(400).json({ error: 'No hub link available — this booking pre-dates the customer hub feature. Edit and re-save the booking to generate one.' });
+
+  const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
+  const hubUrl = withSig(BASE_URL + '/i/' + d.agreementToken, d.agreementToken);
+
+  // Choose subject + body based on agreement state — gives the client useful
+  // context about what they should do next when they open the email.
+  const isSigned = !!row.agreement_signed_at;
+  const ctaCopy = isSigned
+    ? 'Open the hub below for your booking details, reschedule requests, and report status.'
+    : 'Open the hub below to sign your inspection agreement, view your details, or reschedule.';
+
+  try {
+    const html = emailWrap(
+      '<h2 style="color:#0F1C35">Your Inspection Link</h2>'
+      + '<p>Hi ' + escapeHtml(buyer.firstName || 'there') + ', here is your inspection hub link as requested:</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.address || '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.dateFmt || '') + ' @ ' + escapeHtml(d.time || '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
+      + '</table>'
+      + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
+      + '<p style="margin:0 0 10px;font-size:.9rem;color:#1B2D52"><strong>Your Inspection Hub</strong></p>'
+      + '<p style="margin:0 0 12px;font-size:.84rem;color:#555">' + escapeHtml(ctaCopy) + '</p>'
+      + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
+      + '</div>'
+      + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
+    );
+    await sendEmail(
+      buyer.email,
+      'Your Inspection Hub — ' + (d.dateFmt || '') + ' [' + confId + ']',
+      html
+    );
+    res.json({ success: true, sentTo: buyer.email });
+  } catch(e) {
+    console.error('Resend hub link failed:', e.message);
+    res.status(500).json({ error: 'Could not send email: ' + e.message });
+  }
+});
+
 app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const confId = req.params.confId;
