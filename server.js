@@ -619,17 +619,38 @@ async function downloadFromR2(key) {
 // no env vars need to be set. If they share an R2 account but use different
 // buckets, only INSPECTOR_R2_BUCKET_NAME needs to be set. If the inspector
 // uses an entirely separate R2 account, set all four.
+//
+// Helper treats EMPTY STRINGS as unset. Without this, an env var set to "" in
+// Railway (which is easy to do by accident — leaving the value field blank
+// when adding a variable) would pass the `||` fallback as a truthy override
+// and break credential resolution with a cryptic "Resolved credential object
+// is not valid" error from the AWS SDK.
+function pickEnv(primary, fallback) {
+  const p = process.env[primary];
+  if (p && p.trim() && p.trim() !== 'undefined') return p.trim();
+  const f = process.env[fallback];
+  return (f && f.trim()) ? f.trim() : null;
+}
+
 async function downloadFromInspectorR2(key) {
   const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+  const endpoint  = pickEnv('INSPECTOR_R2_ENDPOINT',          'R2_ENDPOINT');
+  const accessKey = pickEnv('INSPECTOR_R2_ACCESS_KEY_ID',     'R2_ACCESS_KEY_ID');
+  const secretKey = pickEnv('INSPECTOR_R2_SECRET_ACCESS_KEY', 'R2_SECRET_ACCESS_KEY');
+  const bucket    = pickEnv('INSPECTOR_R2_BUCKET_NAME',       'R2_BUCKET_NAME');
+
+  // Fail fast with a clear message rather than letting the SDK throw a
+  // cryptic credential error. Each piece is required.
+  if (!endpoint)  throw new Error('R2 endpoint not configured (set R2_ENDPOINT)');
+  if (!accessKey) throw new Error('R2 access key not configured (set R2_ACCESS_KEY_ID)');
+  if (!secretKey) throw new Error('R2 secret key not configured (set R2_SECRET_ACCESS_KEY)');
+  if (!bucket)    throw new Error('R2 bucket not configured (set R2_BUCKET_NAME)');
+
   const client = new S3Client({
     region: 'auto',
-    endpoint: process.env.INSPECTOR_R2_ENDPOINT || process.env.R2_ENDPOINT,
-    credentials: {
-      accessKeyId:     process.env.INSPECTOR_R2_ACCESS_KEY_ID     || process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.INSPECTOR_R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY,
-    },
+    endpoint,
+    credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
   });
-  const bucket = process.env.INSPECTOR_R2_BUCKET_NAME || process.env.R2_BUCKET_NAME;
   const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const chunks = [];
   for await (const chunk of result.Body) chunks.push(chunk);
@@ -2276,7 +2297,7 @@ app.get('/i/:token/report.pdf', agreementLimiter, async function(req, res) {
     res.send(pdf);
   } catch(e) {
     console.error('Hub PDF download error:', e.message);
-    // Most likely cause is INSPECTOR_R2_BUCKET_NAME mismatch.
+    // Generic user-facing message — clients shouldn't see internal config details.
     return res.status(500).send('Could not retrieve report. Please call (480) 618-0805.');
   }
 });
@@ -2299,7 +2320,20 @@ app.get('/admin/report-pdf/:confId', adminActionLimiter, async function(req, res
     res.send(pdf);
   } catch(e) {
     console.error('Admin report PDF download error:', e.message);
-    return res.status(500).send('R2 fetch failed: ' + escapeHtml(e.message) + '. If this persists, set INSPECTOR_R2_BUCKET_NAME on the website Railway service to whatever bucket the inspector uses.');
+    // Common failure modes — give the user actionable language rather than
+    // pointing at the bucket variable, which is rarely the actual cause.
+    let hint = '';
+    const m = (e.message || '').toLowerCase();
+    if (m.includes('credential')) {
+      hint = 'R2 credentials issue. Check that R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set correctly on the website Railway service. If you set any INSPECTOR_R2_* override variables, try deleting them — the website and inspector usually share the same R2 account.';
+    } else if (m.includes('no such key') || m.includes('notfound')) {
+      hint = 'The PDF was not found in R2. The report may have been generated against a different bucket. If the inspector uses a different bucket, set INSPECTOR_R2_BUCKET_NAME on the website service.';
+    } else if (m.includes('bucket')) {
+      hint = 'Bucket access issue. If the inspector uses a different bucket than the website, set INSPECTOR_R2_BUCKET_NAME on the website service.';
+    } else {
+      hint = 'See the website service logs in Railway for the full error.';
+    }
+    return res.status(500).send('R2 fetch failed: ' + escapeHtml(e.message) + '. ' + hint);
   }
 });
 
