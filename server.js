@@ -3419,7 +3419,7 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
       pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
-      pool.query("SELECT token, data, created_at FROM pending_bookings WHERE created_at > NOW() - INTERVAL '48 hours' ORDER BY created_at DESC"),
+      pool.query("SELECT token, data, created_at FROM pending_bookings WHERE created_at > NOW() - INTERVAL '48 hours' AND token NOT LIKE 'agree_%' ORDER BY created_at DESC"),
       // Mileage roll-up — only counts miles on bookings that aren't cancelled.
       // Uses confirmed_at for the cutoff so the tile reflects when the inspection was booked.
       pool.query(`
