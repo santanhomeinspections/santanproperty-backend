@@ -2722,11 +2722,25 @@ async function load() {
 }
 
 async function cancelBooking(confId) {
-  if (!confirm('Cancel booking ' + confId + '? This will delete the calendar event and email the buyer and agent.')) return;
-  const r = await fetch('/admin/cancel-booking', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId}) });
+  if (!confirm('Cancel booking ' + confId + '? This will delete the calendar event.')) return;
+  // Second prompt: notify clients or silent cancel?
+  //   OK     → send cancellation emails to buyer + buyer's agent
+  //   Cancel → silent cancel, no emails, no SMS, no notifications
+  // Use this silent option for test bookings, mistakes you made, or
+  // cancellations the client already knows about through another channel.
+  const notify = confirm('Notify the buyer and agent by email?\\n\\nOK = send cancellation emails\\nCancel = silent cancel (no email)');
+  const r = await fetch('/admin/cancel-booking', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({confId, silent: !notify})
+  });
   const data = await r.json();
-  if (data.success) { alert('Booking cancelled. Cancellation emails sent.'); load(); }
-  else { alert('Error: ' + (data.error||'Unknown error')); }
+  if (data.success) {
+    alert(notify ? 'Booking cancelled. Cancellation emails sent.' : 'Booking cancelled silently — no notifications were sent.');
+    load();
+  } else {
+    alert('Error: ' + (data.error||'Unknown error'));
+  }
 }
 
 async function markPaid(confId) {
@@ -3001,7 +3015,7 @@ setInterval(load, 60000);
 // ── ADMIN API ROUTES ──────────────────────────────────────────
 app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-  const { confId } = req.body;
+  const { confId, silent } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
 
   let booking;
@@ -3013,6 +3027,8 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
 
   const d = booking.data;
 
+  // Calendar event is always deleted regardless of silent mode — keeping it
+  // on the calendar after cancellation would create real-world confusion.
   if (d.calId) {
     try {
       await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: d.calId, sendUpdates: 'none' });
@@ -3022,6 +3038,14 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   try {
     await pool.query('UPDATE confirmed_bookings SET cancelled_at = NOW() WHERE conf_id = $1', [confId]);
   } catch(e) { console.error('DB cancel update:', e.message); }
+
+  // Silent mode: log it and return without sending emails. Used when you're
+  // cancelling a test booking, an internal mistake, or a booking the client
+  // already knows about through another channel.
+  if (silent) {
+    console.log('Booking cancelled SILENTLY (no client emails): ' + confId);
+    return res.json({ success: true, silent: true });
+  }
 
   const buyerHtml = emailWrap(
     '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
