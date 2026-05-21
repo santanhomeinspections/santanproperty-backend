@@ -141,6 +141,11 @@ async function initDb() {
     // Round-trip driving miles from OWNER_ADDRESS to inspection address.
     // Auto-computed at booking time via Distance Matrix; null if the API/env wasn't available.
     await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS miles NUMERIC(6,2) DEFAULT NULL`);
+    // Operator: which inspector owns this job. 'jaren' (default) or 'jeff'.
+    // Existing rows backfill to 'jaren' so nothing changes for the main business.
+    await pool.query(`ALTER TABLE confirmed_bookings ADD COLUMN IF NOT EXISTS operator TEXT DEFAULT 'jaren'`);
+    await pool.query(`ALTER TABLE pending_bookings   ADD COLUMN IF NOT EXISTS operator TEXT DEFAULT 'jaren'`);
+    await pool.query(`UPDATE confirmed_bookings SET operator = 'jaren' WHERE operator IS NULL`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reschedule_requests (
         id           SERIAL PRIMARY KEY,
@@ -211,6 +216,45 @@ function slotToMins(slot) {
   if (period === 'PM' && h !== 12) h += 12;
   if (period === 'AM' && h === 12) h = 0;
   return h * 60 + m;
+}
+
+// ── OPERATORS ─────────────────────────────────────────────────
+// Per-operator identity. San Tan is the shared brand; what varies per
+// inspector is their name, license, reply-to inbox, notify inbox, the phone
+// number printed on THEIR client-facing emails/agreements/reports, whether
+// SMS fires for their jobs, and what they owe per inspection.
+// Everything else (brand name, noreply@ from-address, review URL, agreement
+// legal terms, pricing) is shared and lives outside this object.
+const OPERATORS = {
+  jaren: {
+    inspectorName: 'Jaren Drummond',
+    btrNumber:     '79346',
+    replyTo:       process.env.OWNER_EMAIL || 'santanpropertyinspections@gmail.com',
+    notifyEmails:  [process.env.OWNER_EMAIL || 'santanpropertyinspections@gmail.com'],
+    phone:         '(480) 618-0805',
+    sms:           true,
+    payRate:       0,
+  },
+  jeff: {
+    inspectorName: 'Jeff Thompson',
+    btrNumber:     '79082',
+    replyTo:       'JDThomeinspections@gmail.com',
+    notifyEmails:  ['JDThomeinspections@gmail.com', process.env.OWNER_EMAIL || 'santanpropertyinspections@gmail.com'],
+    phone:         '(480) 824-8048',
+    sms:           false,
+    payRate:       50,
+  },
+};
+
+// Resolve an operator from any source (booking data, report row, query param).
+// Unknown / missing / legacy → 'jaren' so all existing data and the public
+// booking flow behave exactly as before.
+function getOperator(id) {
+  const key = String(id || '').toLowerCase().trim();
+  return OPERATORS[key] ? key : 'jaren';
+}
+function operatorConfig(id) {
+  return OPERATORS[getOperator(id)];
 }
 
 // ── QUO SMS ──────────────────────────────────────────────────
@@ -521,7 +565,7 @@ async function checkTripCharge(address) {
 }
 
 // ── EMAIL ─────────────────────────────────────────────────────
-async function sendEmail(to, subject, html, attachments) {
+async function sendEmail(to, subject, html, attachments, replyTo) {
   // Strip CRLF from subject to defang header injection via user-controlled name fields
   // (e.g. a booker named "Jane\r\nBcc: leak@evil.com" would otherwise inject a Bcc).
   const safeSubject = String(subject || '').replace(/[\r\n]+/g, ' ').slice(0, 500);
@@ -531,7 +575,7 @@ async function sendEmail(to, subject, html, attachments) {
     const timeout = setTimeout(function(){ controller.abort(); }, 15000);
     const body = {
       from: 'San Tan Property Inspections <noreply@santanpropertyinspections.com>',
-      reply_to: 'santanpropertyinspections@gmail.com',
+      reply_to: replyTo || 'santanpropertyinspections@gmail.com',
       to: to,
       subject: safeSubject,
       html: html,
@@ -658,13 +702,19 @@ async function downloadFromInspectorR2(key) {
 }
 
 // ── AGREEMENT TEXT ────────────────────────────────────────────
-// Versioned agreement text — stored with each signed record
+// Versioned agreement text — stored with each signed record.
+// Now a function so the inspector identity (name / BTR / phone) reflects the
+// operator who owns the booking. The legal body is identical for all operators;
+// only the header identity line and signature contact vary. San Tan remains the
+// brand and business address on every agreement.
 const AGREEMENT_VERSION = '2026-v2';
-const AGREEMENT_TEXT = `SAN TAN PROPERTY INSPECTIONS
-Certified Home Inspector — BTR #79346
-Jaren Drummond
+function agreementText(op) {
+  const cfg = op || OPERATORS.jaren;
+  return `SAN TAN PROPERTY INSPECTIONS
+Certified Home Inspector — BTR #${cfg.btrNumber}
+${cfg.inspectorName}
 3850 E Gallatin Way, San Tan Valley, AZ 85143
-(480) 618-0805 | santanpropertyinspections@gmail.com | santanpropertyinspections.com
+${cfg.phone} | santanpropertyinspections@gmail.com | santanpropertyinspections.com
 
 HOME INSPECTION AGREEMENT
 
@@ -707,11 +757,14 @@ This Agreement may be executed electronically in accordance with the federal E-S
 This Agreement constitutes the entire agreement between the parties. If any provision is found invalid, the remaining provisions remain in effect.
 
 Agreement Version: ${AGREEMENT_VERSION}`;
+}
 
 // ── AGREEMENT PAGE ────────────────────────────────────────────
 function buildAgreementPage(booking, token, opts = {}) {
   const { confId, address, date, time, dateFmt, fullName, buyer, addonsLine, finalPrice } = booking;
   const { signed = false, error = null } = opts;
+  const agText = agreementText(operatorConfig(booking && booking.operator));
+  const opPhone = operatorConfig(booking && booking.operator).phone;
 
   const addonsDisplay = addonsLine && addonsLine !== 'None' ? addonsLine : null;
 
@@ -750,7 +803,7 @@ p{color:#666;line-height:1.6;margin-bottom:12px;font-size:.9rem;}
     <strong>Property:</strong> ${escapeHtml(address)}<br>
     <strong>Date:</strong> ${escapeHtml(dateFmt)} @ ${escapeHtml(time)}
   </div>
-  <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>(480) 618-0805</strong>.</p>
+  <p>You are all set. We look forward to seeing you at the inspection.<br>Questions? Call or text <strong>${opPhone}</strong>.</p>
 </div>
 </body>
 </html>`;
@@ -808,7 +861,7 @@ label input{margin-top:3px;flex-shrink:0;width:16px;height:16px;}
     </div>
 
     <div class="section-title">Agreement</div>
-    <div class="agreement-box">${AGREEMENT_TEXT}</div>
+    <div class="agreement-box">${agText}</div>
 
     ${error ? '<div class="error">' + escapeHtml(error) + '</div>' : ''}
 
@@ -869,9 +922,11 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
   const { confId, address, dateFmt, time, endTime, svcLabel, addonsLine, finalPrice, fullName, buyer } = booking;
   const buyerFirst = (buyer && buyer.firstName) || (fullName ? String(fullName).split(' ')[0] : 'there');
 
-  // Owner first name — used in "Jaren will reach out" copy. Pulls from OWNER_NAME
-  // env var to stay consistent if the owner ever changes; falls back to "Jaren".
-  const ownerFirst = (process.env.OWNER_NAME || 'Jaren').split(' ')[0];
+  // Operator owns the booking; the hub shows their inspector name + phone so the
+  // client reaches the right person. Falls back to OWNER_NAME / Jaren.
+  const opCfg = operatorConfig(booking && booking.operator);
+  const opPhone = opCfg.phone;
+  const ownerFirst = (opCfg.inspectorName || process.env.OWNER_NAME || 'Jaren').split(' ')[0];
 
   const isCancelled    = !!(row && row.cancelled_at);
   const isSigned       = !!(row && row.agreement_signed_at);
@@ -897,7 +952,7 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
   // One-line state summary. Color-coded. This is the first thing the customer sees.
   let banner = '';
   if (isCancelled) {
-    banner = '<div class="banner banner-bad"><strong>This inspection has been cancelled.</strong> Contact us at (480) 618-0805 if you have questions.</div>';
+    banner = '<div class="banner banner-bad"><strong>This inspection has been cancelled.</strong> Contact us at ' + opPhone + ' if you have questions.</div>';
   } else if (reportState === 'delivered') {
     banner = '<div class="banner banner-good"><strong>Your report has been delivered.</strong> Check your email — see the Report section below if you can\'t find it.</div>';
   } else if (inspectionPast && reportState === 'completed') {
@@ -945,7 +1000,7 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
   if (!isCancelled && !inspectionPast) {
     rescheduleSection = '<div class="section">'
       + '<h2>Need to Reschedule?</h2>'
-      + '<p class="muted">Fill out the form below and ' + escapeHtml(ownerFirst) + ' will reach out to find a new time. For same-day changes, please call (480) 618-0805.</p>'
+      + '<p class="muted">Fill out the form below and ' + escapeHtml(ownerFirst) + ' will reach out to find a new time. For same-day changes, please call ' + opPhone + '.</p>'
       + '<form id="rescheduleForm" method="POST" action="/api/reschedule">'
       + '<input type="hidden" name="confId" value="' + escapeHtml(confId) + '"/>'
       + '<input type="hidden" name="name" value="' + escapeHtml(fullName || '') + '"/>'
@@ -977,7 +1032,7 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
         + '<p>Your inspection report has been delivered to <strong>' + escapeHtml((buyer && buyer.email) || 'your email') + '</strong>.</p>'
         + (dlUrl
             ? '<a href="' + escapeHtml(dlUrl) + '" class="btn btn-primary" target="_blank" rel="noopener">Download Report (PDF)</a>'
-            : '<p class="muted">If you can\'t find it, check your spam folder, or call/text (480) 618-0805 and we will resend.</p>')
+            : '<p class="muted">If you can\'t find it, check your spam folder, or call/text ' + opPhone + ' and we will resend.</p>')
         + amendmentNote
         + '</div>';
     } else if (inspectionPast) {
@@ -994,7 +1049,7 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
   }
 
   // ── Cancellation policy note (always visible if not cancelled) ──
-  const policyNote = isCancelled ? '' : '<p class="footnote">Need to change something? Call/text (480) 618-0805. Cancellations within 24 hours of the scheduled time may incur a fee.</p>';
+  const policyNote = isCancelled ? '' : '<p class="footnote">Need to change something? Call/text ' + opPhone + '. Cancellations within 24 hours of the scheduled time may incur a fee.</p>';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1192,6 +1247,7 @@ async function generateAgreementPdf(booking, signedAt, signature, ip) {
   // Use puppeteer (already available in santan-inspector) to generate PDF
   // We build a simple HTML page and render it
   const { confId, address, dateFmt, time, fullName, buyer, finalPrice, addonsLine } = booking;
+  const opCfg = operatorConfig(booking && booking.operator);
   const signedDate = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
 
   const html = `<!DOCTYPE html>
@@ -1220,8 +1276,8 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
 <body>
 <div class="header">
   <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
-  <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
-  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+  <div class="sub">Certified Home Inspector — BTR #${opCfg.btrNumber} &nbsp;|&nbsp; ${opCfg.inspectorName}<br>
+  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; ${opCfg.phone} &nbsp;|&nbsp; santanpropertyinspections.com</div>
 </div>
 
 <h1>HOME INSPECTION AGREEMENT</h1>
@@ -1235,7 +1291,7 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
   <span class="lbl">Confirmation #</span><span class="val">${escapeHtml(confId)}</span>
 </div>
 
-<div class="agreement-text">${escapeHtml(AGREEMENT_TEXT)}</div>
+<div class="agreement-text">${escapeHtml(agreementText(opCfg))}</div>
 
 <div class="sig-block">
   <h2>Electronic Signature Record</h2>
@@ -1284,6 +1340,7 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
 // Called after Jaren reviews and counter-signs from the admin page.
 async function generateExecutedAgreementPdf(booking, signedAt, signature, ip, counterSignedAt, counterSignedBy) {
   const { confId, address, dateFmt, time, fullName, finalPrice, addonsLine } = booking;
+  const opCfg = operatorConfig(booking && booking.operator);
   const signedDate        = new Date(signedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
   const counterSignedDate = new Date(counterSignedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'full', timeStyle: 'short' });
 
@@ -1319,8 +1376,8 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
 <div class="header">
   <div class="executed-badge">FULLY EXECUTED</div>
   <div class="biz">SAN TAN PROPERTY INSPECTIONS</div>
-  <div class="sub">Certified Home Inspector — BTR #79346 &nbsp;|&nbsp; Jaren Drummond<br>
-  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; (480) 618-0805 &nbsp;|&nbsp; santanpropertyinspections.com</div>
+  <div class="sub">Certified Home Inspector — BTR #${opCfg.btrNumber} &nbsp;|&nbsp; ${opCfg.inspectorName}<br>
+  3850 E Gallatin Way, San Tan Valley, AZ 85143 &nbsp;|&nbsp; ${opCfg.phone} &nbsp;|&nbsp; santanpropertyinspections.com</div>
 </div>
 
 <h1>HOME INSPECTION AGREEMENT</h1>
@@ -1334,7 +1391,7 @@ h2{font-size:11pt;color:#1B2D52;margin:18px 0 4px;}
   <span class="lbl">Confirmation #</span><span class="val">${escapeHtml(confId)}</span>
 </div>
 
-<div class="agreement-text">${escapeHtml(AGREEMENT_TEXT)}</div>
+<div class="agreement-text">${escapeHtml(agreementText(opCfg))}</div>
 
 <div class="sig-block">
   <h2>Signatures of the Parties</h2>
@@ -1514,6 +1571,10 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   };
 
   const b = req.body;
+  // Which inspector this request is for. Public bookings omit it → 'jaren'.
+  // Jeff's intake form posts operator:'jeff'. getOperator() rejects anything unknown.
+  const opId  = getOperator(b.operator);
+  const opCfg = OPERATORS[opId];
   let   { address, sqft, yearBuilt, inspType, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
   const addons         = b.addons || [];
   const extraEmails    = (b.extraEmails || []).filter(function(e){ return e && e.trim(); }).slice(0, 5).map(e => clip(e, LEN.email));
@@ -1678,10 +1739,12 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
     ? Math.round(trip.miles * 2 * 100) / 100
     : null;
 
-  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, miles, createdAt: Date.now() };
+  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount, tripCharge: trip, miles, operator: opId, createdAt: Date.now() };
 
   try {
     await dbSet(token, bookingData);
+    // Stamp the operator column too (dbSet only writes the data JSONB).
+    await pool.query('UPDATE pending_bookings SET operator = $1 WHERE token = $2', [opId, token]);
   } catch(e) {
     console.error('DB write failed:', e.message);
     return res.status(500).json({ error: 'Could not save booking. Please try again.' });
@@ -1708,21 +1771,219 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
     + (hasBA ? '<p><b>Buyer Agent:</b> ' + escapeHtml(baName) + (baBrok ? ' — ' + escapeHtml(baBrok) : '') + (baPhone ? '<br>Phone: ' + escapeHtml(baPhone) : '') + (baEmail ? '<br>Email: ' + escapeHtml(baEmail) : '') + '</p>' : '<p><b>Buyer Agent:</b> <i>None provided</i></p>')
     + sellerLineOwner + notesLineOwner + extraEmailsLineOwner + discountLineOwner + tripLineOwner
     + '<div style="margin:28px 0">'
-    + '<a href="' + confirmUrl + '" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CONFIRM AND SEND TEXTS</a>'
+    + '<a href="' + confirmUrl + '" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">' + (opCfg.sms ? 'CONFIRM AND SEND TEXTS' : 'CONFIRM AND SEND EMAILS') + '</a>'
     + '&nbsp;&nbsp;'
     + '<a href="' + cancelUrl + '" style="background:#C0392B;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CANCEL</a>'
     + '</div>'
-    + '<p style="color:#888;font-size:.8rem">Texts will NOT go out until you tap Confirm.</p>'
+    + '<p style="color:#888;font-size:.8rem">' + (opCfg.sms ? 'Texts' : 'Emails') + ' will NOT go out until you tap Confirm.</p>'
     + '</div>';
 
-  sendEmail(process.env.OWNER_EMAIL, 'PENDING BOOKING: ' + fullName + ' — ' + dateFmt + ' @ ' + time, ownerHtml)
-    .then(function(){ console.log('Owner alert sent for ' + confId); })
-    .catch(function(e){ console.error('Owner alert email:', e.message); });
+  // Notify the operator(s). For jaren: email to OWNER_EMAIL + owner SMS.
+  // For jeff: email to BOTH Jeff and Jaren (per setup), and NO SMS.
+  const notifyList = (opCfg.notifyEmails && opCfg.notifyEmails.length)
+    ? opCfg.notifyEmails
+    : [process.env.OWNER_EMAIL];
+  for (const recip of notifyList) {
+    if (!recip) continue;
+    sendEmail(recip, 'PENDING BOOKING' + (opId !== 'jaren' ? ' [' + opCfg.inspectorName + ']' : '') + ': ' + fullName + ' — ' + dateFmt + ' @ ' + time, ownerHtml)
+      .then(function(){ console.log('Owner alert sent for ' + confId + ' → ' + recip); })
+      .catch(function(e){ console.error('Owner alert email:', e.message); });
+  }
 
   res.json({ success: true, confirmationId: confId, message: 'Request received! You will be confirmed shortly.' });
 
-  const ownerSmsBody = 'NEW BOOKING — ' + confId + '\n' + fullName + '\n' + address + '\n' + dateFmt + ' @ ' + time + '\n' + svcLabel + '\n$' + finalPrice + (trip.apply ? ' (incl. trip charge)' : '') + '\n\nCONFIRM:\n' + confirmUrl + '\n\nCANCEL:\n' + cancelUrl;
-  sms(process.env.OWNER_PHONE, ownerSmsBody).catch(function(e){ console.error('Owner SMS:', e.message); });
+  // Owner SMS only fires for operators with sms:true (jaren). Jeff is email-only.
+  if (opCfg.sms) {
+    const ownerSmsBody = 'NEW BOOKING — ' + confId + '\n' + fullName + '\n' + address + '\n' + dateFmt + ' @ ' + time + '\n' + svcLabel + '\n$' + finalPrice + (trip.apply ? ' (incl. trip charge)' : '') + '\n\nCONFIRM:\n' + confirmUrl + '\n\nCANCEL:\n' + cancelUrl;
+    sms(process.env.OWNER_PHONE, ownerSmsBody).catch(function(e){ console.error('Owner SMS:', e.message); });
+  }
+});
+
+// ── JEFF INTAKE FORM ──────────────────────────────────────────
+// Public request form Jeff hands to his realtors. Mirrors the main booking
+// form but is intentionally a *request*: it posts to /api/book with
+// operator:'jeff', creating a pending row Jeff reviews and confirms manually.
+// Pricing shown is the same San Tan pricing (estimate); Jeff can adjust on
+// confirm. No calendar, no auto-confirm, email-only downstream.
+function renderJeffIntakePage() {
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Request an Inspection — San Tan Property Inspections</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#F4F1EA;color:#1a1a1a;margin:0;padding:0;line-height:1.5}
+  .wrap{max-width:640px;margin:0 auto;padding:24px 18px 60px}
+  .head{text-align:center;background:#0F1C35;padding:26px 18px;border-radius:10px;margin-bottom:6px}
+  .brand{font-family:Georgia,serif;font-size:1.3rem;font-weight:700;color:#C9A84C;letter-spacing:2px}
+  .brand-sub{font-family:Georgia,serif;font-size:.8rem;color:#E8C97A;letter-spacing:4px;margin-top:2px}
+  .insp{color:#fff;font-size:.85rem;margin-top:10px;opacity:.85}
+  h1{font-size:1.25rem;color:#0F1C35;margin:24px 0 4px}
+  .lead{color:#5a5a5a;font-size:.92rem;margin:0 0 20px}
+  .card{background:#fff;border-radius:10px;padding:20px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  .card h2{font-size:.95rem;text-transform:uppercase;letter-spacing:.5px;color:#1B2D52;margin:0 0 14px}
+  label{display:block;font-size:.82rem;font-weight:600;color:#445;margin:12px 0 4px}
+  input,select,textarea{width:100%;padding:11px 12px;border:1px solid #d4cdbf;border-radius:7px;font-size:1rem;background:#fff;font-family:inherit}
+  textarea{min-height:70px;resize:vertical}
+  .row{display:flex;gap:12px}.row>div{flex:1}
+  .addons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+  .addon{display:flex;align-items:center;gap:8px;background:#F8F6F0;border:1px solid #e4ddcd;border-radius:7px;padding:10px;font-size:.9rem;cursor:pointer}
+  .addon input{width:auto}
+  .price{background:#0F1C35;color:#fff;border-radius:10px;padding:18px;text-align:center;margin-bottom:16px}
+  .price .amt{font-size:2rem;font-weight:700;color:#C9A84C}
+  .price .note{font-size:.78rem;opacity:.8;margin-top:6px}
+  .btn{width:100%;background:#C9A84C;color:#0F1C35;font-weight:700;font-size:1.05rem;padding:15px;border:none;border-radius:8px;cursor:pointer;margin-top:8px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .msg{padding:14px;border-radius:8px;margin-bottom:14px;font-size:.92rem;display:none}
+  .msg.err{background:#FDECEA;color:#922;border:1px solid #f5c6cb;display:block}
+  .msg.ok{background:#E9F7EF;color:#1c6b3f;border:1px solid #bfe3cd;display:block}
+  .req{color:#C0392B}
+</style></head>
+<body><div class="wrap">
+  <div class="head">
+    <div class="brand">SAN TAN PROPERTY</div>
+    <div class="brand-sub">INSPECTIONS</div>
+    <div class="insp">Inspection by Jeff Thompson · AZ BTR #79082</div>
+  </div>
+  <h1>Request an Inspection</h1>
+  <p class="lead">Fill out the details below and Jeff will follow up by email to confirm your inspection. The price shown is an estimate.</p>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="card">
+    <h2>Property</h2>
+    <label>Property Address <span class="req">*</span></label>
+    <input id="address" autocomplete="off" placeholder="123 E Main St, Gilbert, AZ 85296">
+    <div class="row">
+      <div><label>Square Footage <span class="req">*</span></label><input id="sqft" inputmode="numeric" placeholder="2000"></div>
+      <div><label>Year Built</label><input id="yearBuilt" inputmode="numeric" placeholder="2005"></div>
+    </div>
+    <label>Inspection Type <span class="req">*</span></label>
+    <select id="inspType">
+      <option value="pre-purchase">Pre-Purchase Inspection</option>
+      <option value="pre-listing">Pre-Listing Inspection</option>
+      <option value="new-construction">New Construction Inspection</option>
+      <option value="warranty">Pre-One-Year Warranty Inspection</option>
+      <option value="reinspection">Re-Inspection</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <h2>Add-Ons (optional)</h2>
+    <div class="addons">
+      <label class="addon"><input type="checkbox" class="addon-cb" value="termite"> Termite / WDO ($85)</label>
+      <label class="addon"><input type="checkbox" class="addon-cb" value="pool"> Pool ($60)</label>
+      <label class="addon"><input type="checkbox" class="addon-cb" value="spa"> Spa ($40)</label>
+      <label class="addon"><input type="checkbox" class="addon-cb" value="shed"> Shed / Outbuilding ($50)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Preferred Schedule</h2>
+    <div class="row">
+      <div><label>Preferred Date <span class="req">*</span></label><input id="date" type="date"></div>
+      <div><label>Preferred Time <span class="req">*</span></label>
+        <select id="time">
+          <option value="8:00 AM">8:00 AM</option><option value="9:00 AM">9:00 AM</option>
+          <option value="10:00 AM">10:00 AM</option><option value="11:00 AM">11:00 AM</option>
+          <option value="12:00 PM">12:00 PM</option><option value="1:00 PM">1:00 PM</option>
+          <option value="2:00 PM">2:00 PM</option><option value="3:00 PM">3:00 PM</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Buyer / Client</h2>
+    <div class="row">
+      <div><label>First Name <span class="req">*</span></label><input id="bFirst" autocomplete="off"></div>
+      <div><label>Last Name</label><input id="bLast" autocomplete="off"></div>
+    </div>
+    <label>Email <span class="req">*</span></label><input id="bEmail" type="email" autocomplete="off">
+    <label>Phone <span class="req">*</span></label><input id="bPhone" inputmode="tel" autocomplete="off">
+  </div>
+
+  <div class="card">
+    <h2>Buyer's Agent (optional)</h2>
+    <label>Name</label><input id="aName" autocomplete="off">
+    <div class="row">
+      <div><label>Email</label><input id="aEmail" type="email" autocomplete="off"></div>
+      <div><label>Phone</label><input id="aPhone" inputmode="tel" autocomplete="off"></div>
+    </div>
+    <label>Brokerage</label><input id="aBrok" autocomplete="off">
+    <label>Notes for Jeff</label><textarea id="notes" placeholder="Gate code, special requests, etc."></textarea>
+  </div>
+
+  <div class="price">
+    <div style="font-size:.8rem;opacity:.8;text-transform:uppercase;letter-spacing:1px">Estimated Total</div>
+    <div class="amt" id="priceAmt">&mdash;</div>
+    <div class="note">Estimate based on standard pricing. Jeff confirms the final total.</div>
+  </div>
+
+  <button class="btn" id="submitBtn">Request Inspection</button>
+</div>
+
+<script>
+(function(){
+  var PRICE_BASE = {1000:400,1500:425,2000:450,2500:475,3000:550,3500:600,4000:650,4500:675,9999:750};
+  var ADDON_P = {termite:85,pool:60,spa:40,shed:50};
+  function tier(n){n=Number(n);if(!n||n<=0)return null;if(n<=1000)return 1000;if(n<=1500)return 1500;if(n<=2000)return 2000;if(n<=2500)return 2500;if(n<=3000)return 3000;if(n<=3500)return 3500;if(n<=4000)return 4000;if(n<=4500)return 4500;return 9999;}
+  function calc(){
+    var t=tier(document.getElementById('sqft').value);
+    if(!t){document.getElementById('priceAmt').innerHTML='&mdash;';return;}
+    var p=PRICE_BASE[t];
+    var yr=Number(document.getElementById('yearBuilt').value)||0;
+    if(yr>0&&yr<=1959)p+=80;else if(yr>=1960&&yr<=1980)p+=50;
+    document.querySelectorAll('.addon-cb').forEach(function(cb){if(cb.checked)p+=ADDON_P[cb.value]||0;});
+    document.getElementById('priceAmt').textContent='$'+p;
+  }
+  document.getElementById('sqft').addEventListener('input',calc);
+  document.getElementById('yearBuilt').addEventListener('input',calc);
+  document.querySelectorAll('.addon-cb').forEach(function(cb){cb.addEventListener('change',calc);});
+
+  function showMsg(text,kind){var m=document.getElementById('msg');m.textContent=text;m.className='msg '+kind;window.scrollTo({top:0,behavior:'smooth'});}
+
+  document.getElementById('submitBtn').addEventListener('click',async function(){
+    var btn=this;
+    var addons=[];document.querySelectorAll('.addon-cb').forEach(function(cb){if(cb.checked)addons.push(cb.value);});
+    var payload={
+      operator:'jeff',
+      address:document.getElementById('address').value.trim(),
+      sqft:document.getElementById('sqft').value.trim(),
+      yearBuilt:document.getElementById('yearBuilt').value.trim(),
+      inspType:document.getElementById('inspType').value,
+      addons:addons,
+      date:document.getElementById('date').value,
+      time:document.getElementById('time').value,
+      totalMins:120,
+      buyer:{firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),email:document.getElementById('bEmail').value.trim(),phone:document.getElementById('bPhone').value.trim()},
+      buyerAgent:{name:document.getElementById('aName').value.trim(),email:document.getElementById('aEmail').value.trim(),phone:document.getElementById('aPhone').value.trim(),brokerage:document.getElementById('aBrok').value.trim()},
+      notes:document.getElementById('notes').value.trim()
+    };
+    if(!payload.address||!payload.sqft||!payload.date||!payload.time||!payload.buyer.firstName||!payload.buyer.email||!payload.buyer.phone){
+      showMsg('Please fill out all required fields (marked with *).','err');return;
+    }
+    btn.disabled=true;btn.textContent='Sending…';
+    try{
+      var r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      var data=await r.json();
+      if(!r.ok){showMsg(data.error||'Something went wrong. Please try again.','err');btn.disabled=false;btn.textContent='Request Inspection';return;}
+      showMsg('Request received! Jeff will email you shortly to confirm. Confirmation #'+data.confirmationId,'ok');
+      btn.textContent='Request Sent ✓';
+    }catch(e){
+      showMsg('Network error. Please try again or contact Jeff directly.','err');
+      btn.disabled=false;btn.textContent='Request Inspection';
+    }
+  });
+})();
+</script>
+</body></html>`;
+}
+
+app.get(['/book-jeff', '/jeff'], function(req, res) {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderJeffIntakePage());
 });
 
 // ── CONFIRM BOOKING ───────────────────────────────────────────
@@ -1748,6 +2009,10 @@ app.get('/confirm/:token', async function(req, res) {
 
   const { confId, address, sqft, yearBuilt, svcLabel, addons, addonsLine, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails, discountCode, discountPct, discountAmount } = booking;
   const tripCharge = booking.tripCharge || { apply: false, miles: 0 };
+  // Which inspector owns this booking (defaults to jaren). Drives reply-to,
+  // the phone shown to the client, whether SMS fires, and notify recipients.
+  const opId  = getOperator(booking.operator);
+  const opCfg = OPERATORS[opId];
 
   // Normalize buyerAgent fields locally — these were created in /api/book but don't survive the round-trip through pending_bookings
   const ba      = (buyerAgent && typeof buyerAgent === 'object') ? buyerAgent : {};
@@ -1765,7 +2030,10 @@ app.get('/confirm/:token', async function(req, res) {
   const endDT2   = new Date(startDT2.getTime() + (totalMins||120)*60000);
 
   let calId = null;
-  try {
+  // Calendar is only integrated for jaren. Jeff (and any future operator without
+  // a calendar) skips event creation entirely — he manages his own schedule.
+  if (opId === 'jaren') {
+   try {
     const descLines = [
       'Conf: ' + confId, 'Service: ' + svcLabel,
       addons.length ? 'Add-ons: ' + addonsLine : null,
@@ -1790,13 +2058,14 @@ app.get('/confirm/:token', async function(req, res) {
     const r = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: ev, sendUpdates:'all' });
     calId = r.data.id;
     console.log('Calendar event created: ' + calId);
-  } catch(e) { console.error('Calendar:', e.message); }
+   } catch(e) { console.error('Calendar:', e.message); }
+  }
 
   // Save to confirmed_bookings — runs regardless of Calendar success/failure
   try {
     await pool.query(
-      'INSERT INTO confirmed_bookings (conf_id, data, miles) VALUES ($1, $2, $3) ON CONFLICT (conf_id) DO NOTHING',
-      [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() }), (booking && booking.miles != null) ? booking.miles : null]
+      'INSERT INTO confirmed_bookings (conf_id, data, miles, operator) VALUES ($1, $2, $3, $4) ON CONFLICT (conf_id) DO NOTHING',
+      [confId, JSON.stringify({ ...booking, calId, confirmedAt: new Date().toISOString() }), (booking && booking.miles != null) ? booking.miles : null, opId]
     );
     console.log('Confirmed booking saved to DB: ' + confId);
   } catch(e) { console.error('DB confirmed save:', e.message); }
@@ -1818,24 +2087,29 @@ app.get('/confirm/:token', async function(req, res) {
     await dbSet('agree_' + agreeToken, { ...booking, calId, confirmedAt: new Date().toISOString(), agreeToken });
   } catch(e) { console.error('Agreement token store error:', e.message); }
 
-  // SMS - buyer
-  // Sends the hub URL — single link that opens the status page where the
-  // client can sign the agreement, reschedule, or check report status.
-  await sms(buyer.phone,
-    'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
-  );
-
-  // SMS - buyer agent (only if phone provided)
-  if (baPhone) {
-    await sms(baPhone,
-      'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+  // SMS — buyer, buyer agent, seller agent.
+  // Gated on the operator's sms flag: inspectors with sms:false (e.g. Jeff)
+  // run email-only, so none of these texts fire for their bookings.
+  if (opCfg.sms) {
+    // SMS - buyer
+    // Sends the hub URL — single link that opens the status page where the
+    // client can sign the agreement, reschedule, or check report status.
+    await sms(buyer.phone,
+      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
-  }
 
-  if (sellerAgent && sellerAgent.phone) {
-    await sms(sellerAgent.phone,
-      'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nIMPORTANT: Please send the CBS code so I can access the home, and reply to this message to confirm the inspection.\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? (480) 618-0805 | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
-    );
+    // SMS - buyer agent (only if phone provided)
+    if (baPhone) {
+      await sms(baPhone,
+        'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      );
+    }
+
+    if (sellerAgent && sellerAgent.phone) {
+      await sms(sellerAgent.phone,
+        'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nIMPORTANT: Please send the CBS code so I can access the home, and reply to this message to confirm the inspection.\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      );
+    }
   }
 
   const tripLineBuyer = tripCharge.apply ? ' (incl. $' + TRIP_CHARGE_AMT + ' trip charge)' : '';
@@ -1861,11 +2135,11 @@ app.get('/confirm/:token', async function(req, res) {
     + '<p style="margin:14px 0 0;font-size:.78rem;color:#888;line-height:1.5"><strong style="color:#7a4a00">Action needed:</strong> your inspection agreement must be signed before the report can be released. The hub above will walk you through it.</p>'
     + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
-    + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
+    + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
   );
 
   try {
-    await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml);
+    await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml, null, opCfg.replyTo);
   } catch(e) { console.error('Buyer email:', e.message); }
 
   // Extra recipients email
@@ -1882,11 +2156,11 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
       + '</table>'
       + '<p>The inspection report will be delivered the <strong>same day</strong> as the inspection.</p>'
-      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     for (const email of extraEmails) {
       try {
-        await sendEmail(email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', extraHtml);
+        await sendEmail(email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', extraHtml, null, opCfg.replyTo);
       } catch(e) { console.error('Extra recipient email to ' + email + ':', e.message); }
     }
   }
@@ -1906,10 +2180,10 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
       + '</table>'
       + '<p>Please confirm the seller\'s agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
-      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     try {
-      await sendEmail(baEmail, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml);
+      await sendEmail(baEmail, 'Inspection Confirmed — ' + fullName + ' — ' + dateFmt + ' @ ' + time, baHtml, null, opCfg.replyTo);
     } catch(e) { console.error('Buyer agent email:', e.message); }
   }
 
@@ -1928,10 +2202,10 @@ app.get('/confirm/:token', async function(req, res) {
       + '<ul style="margin:12px 0 12px 20px"><li>Gas on &amp; accessible</li><li>Water on &amp; accessible</li><li>Electrical on &amp; accessible</li><li>Attic access clear &amp; accessible</li></ul>'
       + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0"><p style="margin:0;font-size:.92rem"><strong style="color:#1B2D52">Important:</strong> Please send the <strong>CBS code</strong> so I can access the home, and reply to confirm the inspection.</p></div>'
       + '<p style="background:#FFF3CD;padding:10px;border-radius:6px"><strong>Note:</strong> If utilities are not on at the time of inspection, a $125 re-inspection fee will apply.</p>'
-      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     try {
-      await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml);
+      await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml, null, opCfg.replyTo);
     } catch(e) { console.error('Seller agent email:', e.message); }
   }
 
@@ -1980,7 +2254,7 @@ td:last-child{color:#2C2C2C;font-weight:600;}
   </div>
   <div class="check">&#10003;</div>
   <h1>Booking Confirmed!</h1>
-  <p class="sub">Confirmation texts and emails have been sent to the buyer and agents.</p>
+  <p class="sub">Confirmation ${opCfg.sms ? 'texts and emails have' : 'emails have'} been sent to the buyer and agents.</p>
   <div class="conf-badge">Confirmation # ${escapeHtml(confId)}</div>
   <table>
     <tr><td>Buyer</td><td>${escapeHtml(fullName)}</td></tr>
@@ -1995,11 +2269,11 @@ td:last-child{color:#2C2C2C;font-weight:600;}
     <strong>Agreement link sent to buyer.</strong> The report will be locked until the agreement is signed. You can check signature status in the admin dashboard.
   </div>
   <div class="notice">
-    <strong>Texts sent to:</strong> ${escapeHtml(fullName)}${baPhone ? ' &middot; ' + escapeHtml(baName) : ''}${sellerAgent && sellerAgent.name ? ' &middot; ' + escapeHtml(sellerAgent.name) : ''}<br>
+    ${opCfg.sms ? '<strong>Texts sent to:</strong> ' + escapeHtml(fullName) + (baPhone ? ' &middot; ' + escapeHtml(baName) : '') + (sellerAgent && sellerAgent.name ? ' &middot; ' + escapeHtml(sellerAgent.name) : '') + '<br>' : ''}
     <strong>Emails sent to:</strong> ${escapeHtml(buyer.email)}${baEmail ? ' &middot; ' + escapeHtml(baEmail) : ''}
   </div>
   <div class="footer">
-    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; (480) 618-0805 &nbsp;&middot;&nbsp; BTR #79346
+    <a href="https://santanpropertyinspections.com">santanpropertyinspections.com</a> &nbsp;&middot;&nbsp; ${opCfg.phone} &nbsp;&middot;&nbsp; BTR #${opCfg.btrNumber}
   </div>
 </div>
 </body>
@@ -2097,6 +2371,8 @@ app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
 
   // Background: generate PDF, upload to R2, send confirmation email
   setImmediate(async function() {
+    const opCfg = operatorConfig(booking && booking.operator);
+    const notifyList = (opCfg.notifyEmails && opCfg.notifyEmails.length) ? opCfg.notifyEmails : [process.env.OWNER_EMAIL];
     try {
       const pdf = await generateAgreementPdf(booking, signedAt, signature, ip);
       if (pdf) {
@@ -2125,7 +2401,10 @@ app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
         + '<b>Signature:</b> ' + escapeHtml(signature) + '<br>'
         + '<b>IP:</b> ' + escapeHtml(ip) + '</p>'
         + '</div>';
-      await sendEmail(process.env.OWNER_EMAIL, 'AGREEMENT SIGNED: ' + booking.fullName + ' [' + booking.confId + ']', ownerHtml);
+      for (const recip of notifyList) {
+        if (!recip) continue;
+        await sendEmail(recip, 'AGREEMENT SIGNED' + (opCfg.inspectorName !== 'Jaren Drummond' ? ' [' + opCfg.inspectorName + ']' : '') + ': ' + booking.fullName + ' [' + booking.confId + ']', ownerHtml);
+      }
     } catch(e) { console.error('Owner agreement notification email:', e.message); }
 
     // Send client confirmation email
@@ -2139,9 +2418,9 @@ app.post('/agreement/:token/sign', agreementLimiter, async function(req, res) {
         + '<tr><td style="padding:6px 0;color:#888">Confirmation #</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(booking.confId) + '</td></tr>'
         + '</table>'
         + '<p>Your agreement has been recorded. You are all set for your inspection.</p>'
-        + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
+        + '<p>Questions? Call or text <strong>' + opCfg.phone + '</strong></p>'
       );
-      await sendEmail(booking.buyer.email, 'Agreement Signed — ' + booking.confId, clientHtml);
+      await sendEmail(booking.buyer.email, 'Agreement Signed — ' + booking.confId, clientHtml, null, opCfg.replyTo);
     } catch(e) { console.error('Client agreement confirmation email:', e.message); }
   });
 });
@@ -2311,6 +2590,7 @@ app.get('/admin/report-pdf/:confId', adminActionLimiter, async function(req, res
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
   }
+  if (!(await roleCanTouchBooking(adminRole(req), req.params.confId))) return res.status(403).send('Forbidden');
   const info = await getReportInfoForConfId(req.params.confId);
   if (!info.id || !info.pdfKey) return res.status(404).send('No report PDF on file for ' + escapeHtml(req.params.confId) + '. The inspector may not have generated one yet.');
   try {
@@ -2344,7 +2624,9 @@ app.get('/admin/report-pdf/:confId', adminActionLimiter, async function(req, res
 // run on every dashboard refresh), so the dashboard fetches this once and
 // caches the result for the session.
 app.get('/admin/reports-map', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const role = adminRole(req);
+  if (!role) return res.status(401).json({ error: 'Unauthorized' });
+  const scoped = role !== 'jaren';
   try {
     const r = await pool.query(
       `SELECT id,
@@ -2354,7 +2636,7 @@ app.get('/admin/reports-map', adminActionLimiter, async function(req, res) {
               status,
               report_version
          FROM reports
-        WHERE report_data->>'confId' IS NOT NULL`
+        WHERE report_data->>'confId' IS NOT NULL` + (scoped ? " AND operator = 'jeff'" : '')
     );
     // Build a confId-keyed map. If a confId somehow has multiple report rows
     // (shouldn't happen but defensive), keep the latest by version then status.
@@ -2503,16 +2785,44 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'monroe';
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('⚠️  ADMIN_PASSWORD env var not set — using legacy fallback. Set the env var and remove the fallback ASAP.');
 }
+// Jeff's separate admin password. When set, logging in with it scopes the admin
+// to operator='jeff' only. If unset, Jeff simply has no login (Jaren still sees all).
+const ADMIN_PASSWORD_JEFF = process.env.ADMIN_PASSWORD_JEFF || null;
 
-function checkAdmin(req) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
-  if (pass == null) return false;
-  // Constant-time comparison so password length / prefix can't be timing-attacked.
-  const a = Buffer.from(pass);
-  const b = Buffer.from(ADMIN_PASSWORD);
+// Constant-time string compare (equal-length guard + timingSafeEqual).
+function safeEq(input, secret) {
+  if (input == null || secret == null) return false;
+  const a = Buffer.from(input);
+  const b = Buffer.from(secret);
   if (a.length !== b.length) return false;
   try { return require('crypto').timingSafeEqual(a, b); } catch (_) { return false; }
+}
+
+// Returns the operator role of the authenticated admin: 'jaren' (full access,
+// sees every operator), 'jeff' (scoped to his own data), or null (unauthorized).
+function adminRole(req) {
+  const auth = req.headers['authorization'];
+  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  if (pass == null) return null;
+  if (safeEq(pass, ADMIN_PASSWORD)) return 'jaren';
+  if (ADMIN_PASSWORD_JEFF && safeEq(pass, ADMIN_PASSWORD_JEFF)) return 'jeff';
+  return null;
+}
+
+function checkAdmin(req) {
+  return adminRole(req) !== null;
+}
+
+// Authorize a role to act on a specific booking. Jaren may touch any booking;
+// Jeff may only touch bookings where operator='jeff'. Returns true/false.
+async function roleCanTouchBooking(role, confId) {
+  if (role === 'jaren') return true;
+  if (role !== 'jeff') return false;
+  try {
+    const r = await pool.query('SELECT operator FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return false;
+    return getOperator(r.rows[0].operator) === 'jeff';
+  } catch (_) { return false; }
 }
 
 app.get('/admin', adminAuthLimiter, function(req, res) {
@@ -2580,7 +2890,7 @@ tr:hover td{background:rgba(201,168,76,.04);}
     <div id="healthBody" style="padding:18px 20px"><div class="empty">Loading...</div></div>
   </div>
 
-  <div class="card" style="margin-bottom:20px">
+  <div class="card" style="margin-bottom:20px" id="codesCard">
     <div class="card-hd"><h2>Discount Codes</h2></div>
     <div style="padding:16px 20px;border-bottom:1px solid #243660;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="newCode" placeholder="Code (e.g. AGENT15)" style="background:#243660;border:1px solid #344870;color:#fff;padding:8px 12px;border-radius:6px;font-size:.83rem;width:160px;outline:none"/>
@@ -2631,6 +2941,13 @@ async function load() {
       fetch('/admin/reports-map').catch(function(){ return null; }),
     ]);
     const d = await r.json();
+    // Scoped-view indicator: when Jeff is logged in, make clear he's seeing only his data.
+    if (d.role && d.role !== 'jaren') {
+      var navH1 = document.querySelector('nav h1');
+      if (navH1) navH1.textContent = 'San Tan — ' + (d.role.charAt(0).toUpperCase() + d.role.slice(1)) + "'s Inspections";
+      var cc = document.getElementById('codesCard');
+      if (cc) cc.style.display = 'none';
+    }
     const reportsMap = (rm && rm.ok) ? (await rm.json()).reports || {} : {};
     const INSPECTOR_URL = ${JSON.stringify(process.env.INSPECTOR_URL || '')};
     // Default empty = link goes straight to INSPECTOR_URL home. Set to e.g.
@@ -2657,7 +2974,10 @@ async function load() {
       '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
       '<div class="stat"><div class="lbl">Unsigned Agreements</div><div class="val" style="color:'+(unsignedCount>0?'#e8a87c':'#1ab464')+'">'+unsignedCount+'</div><div class="sub">pending signature</div></div>' +
       '<div class="stat"><div class="lbl">Reschedule Requests</div><div class="val" style="color:'+(d.reschedules.length>0?'#e8a87c':'#C9A84C')+'">'+d.reschedules.length+'</div><div class="sub">open requests</div></div>' +
-      '<div class="stat"><div class="lbl">Miles This Month</div><div class="val">'+(d.mileage&&d.mileage.monthMiles?Number(d.mileage.monthMiles).toFixed(1):'0')+'</div><div class="sub">YTD '+(d.mileage&&d.mileage.ytdMiles?Number(d.mileage.ytdMiles).toFixed(0):'0')+' &nbsp;<a href="/admin/mileage-csv?from='+(new Date().getFullYear())+'-01-01&to='+(new Date().getFullYear())+'-12-31" style="color:#C9A84C;text-decoration:underline;font-size:.7rem">CSV</a></div></div>';
+      '<div class="stat"><div class="lbl">Miles This Month</div><div class="val">'+(d.mileage&&d.mileage.monthMiles?Number(d.mileage.monthMiles).toFixed(1):'0')+'</div><div class="sub">YTD '+(d.mileage&&d.mileage.ytdMiles?Number(d.mileage.ytdMiles).toFixed(0):'0')+' &nbsp;<a href="/admin/mileage-csv?from='+(new Date().getFullYear())+'-01-01&to='+(new Date().getFullYear())+'-12-31" style="color:#C9A84C;text-decoration:underline;font-size:.7rem">CSV</a></div></div>' +
+      ((d.role === 'jaren' && d.jeffOwes && d.jeffOwes.count > 0)
+        ? '<div class="stat"><div class="lbl">Jeff Owes</div><div class="val" style="color:#C9A84C">$'+d.jeffOwes.total.toLocaleString()+'</div><div class="sub">'+d.jeffOwes.count+' inspection'+(d.jeffOwes.count!==1?'s':'')+' &times; $'+d.jeffOwes.rate+'</div></div>'
+        : '');
 
     renderCodes(d.codes || []);
     renderPending(d.pending || []);
@@ -3051,6 +3371,7 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId, silent } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
 
   let booking;
   try {
@@ -3060,6 +3381,7 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   } catch(e) { return res.status(500).json({ error: e.message }); }
 
   const d = booking.data;
+  const opCfg = operatorConfig(booking.operator || (d && d.operator));
 
   // Calendar event is always deleted regardless of silent mode — keeping it
   // on the calendar after cancellation would create real-world confusion.
@@ -3092,11 +3414,11 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
     + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + (d.time||'') + '</td></tr>'
     + '</table>'
     + '<p>If you would like to reschedule, please contact us:</p>'
-    + '<p>&#128222; <strong>(480) 618-0805</strong><br>&#9993; <strong>santanpropertyinspections@gmail.com</strong></p>'
+    + '<p>&#128222; <strong>' + opCfg.phone + '</strong><br>&#9993; <strong>santanpropertyinspections@gmail.com</strong></p>'
   );
 
   try {
-    if (d.buyer && d.buyer.email) await sendEmail(d.buyer.email, 'Inspection Cancelled — ' + confId, buyerHtml);
+    if (d.buyer && d.buyer.email) await sendEmail(d.buyer.email, 'Inspection Cancelled — ' + confId, buyerHtml, null, opCfg.replyTo);
   } catch(e) { console.error('Cancel buyer email:', e.message); }
 
   if (d.buyerAgent && d.buyerAgent.email) {
@@ -3110,9 +3432,9 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + (d.dateFmt||'') + '</td></tr>'
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
       + '</table>'
-      + '<p>Questions? Call/text <strong>(480) 618-0805</strong></p>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
-    try { await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml); } catch(e) {}
+    try { await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml, null, opCfg.replyTo); } catch(e) {}
   }
 
   res.json({ success: true });
@@ -3122,6 +3444,7 @@ app.post('/admin/mark-paid', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
   try {
     await pool.query('UPDATE confirmed_bookings SET paid_at = NOW() WHERE conf_id = $1', [confId]);
     res.json({ success: true });
@@ -3131,6 +3454,8 @@ app.post('/admin/mark-paid', adminActionLimiter, async function(req, res) {
 app.post('/admin/mark-unpaid', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
+  if (!confId) return res.status(400).json({ error: 'No confId' });
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
   try {
     await pool.query('UPDATE confirmed_bookings SET paid_at = NULL WHERE conf_id = $1', [confId]);
     res.json({ success: true });
@@ -3142,6 +3467,7 @@ app.post('/admin/set-payment', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId, method } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
   const allowed = ['cash', 'card', 'venmo', 'zelle', ''];
   if (!allowed.includes(method)) return res.status(400).json({ error: 'Invalid method' });
   try {
@@ -3167,6 +3493,7 @@ app.post('/admin/hard-delete-booking', adminActionLimiter, async function(req, r
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
   try {
     // Best-effort: try to delete calendar event if one was created
     const r = await pool.query('SELECT data FROM confirmed_bookings WHERE conf_id = $1', [confId]);
@@ -3187,6 +3514,7 @@ app.get('/admin/agreement-pdf/:confId', adminActionLimiter, async function(req, 
     return res.status(401).send('Unauthorized');
   }
   const { confId } = req.params;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('Forbidden');
   try {
     const r = await pool.query('SELECT agreement_pdf_key FROM confirmed_bookings WHERE conf_id = $1', [confId]);
     if (!r.rows.length || !r.rows[0].agreement_pdf_key) {
@@ -3209,6 +3537,7 @@ app.get('/admin/executed-pdf/:confId', adminActionLimiter, async function(req, r
     return res.status(401).send('Unauthorized');
   }
   const { confId } = req.params;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('Forbidden');
   try {
     const r = await pool.query('SELECT counter_signed_pdf_key FROM confirmed_bookings WHERE conf_id = $1', [confId]);
     if (!r.rows.length || !r.rows[0].counter_signed_pdf_key) {
@@ -3230,13 +3559,11 @@ app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { confId } = req.body;
   if (!confId) return res.status(400).json({ error: 'No confId' });
-
-  // Owner name comes from env so it stays consistent and we don't trust the browser
-  const counterSignedBy = process.env.OWNER_NAME || 'Jaren Drummond';
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
 
   try {
     const r = await pool.query(
-      'SELECT data, agreement_signed_at, agreement_signature, agreement_ip, counter_signed_at FROM confirmed_bookings WHERE conf_id = $1',
+      'SELECT data, operator, agreement_signed_at, agreement_signature, agreement_ip, counter_signed_at FROM confirmed_bookings WHERE conf_id = $1',
       [confId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
@@ -3252,6 +3579,9 @@ app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
     }
 
     const booking         = row.data || {};
+    const opCfg           = operatorConfig(row.operator || booking.operator);
+    // Counter-signer is the operator of record (their name on the executed PDF).
+    const counterSignedBy = opCfg.inspectorName;
     const counterSignedAt = new Date().toISOString();
 
     // Generate the executed PDF (both signatures stamped)
@@ -3306,27 +3636,31 @@ app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
         + '<tr><td style="padding:6px 0;color:#888">Counter-Signed</td><td style="color:#2C2C2C;font-weight:600">' + counterSignedDate + ' (AZ)</td></tr>'
         + '</table>'
         + '<p>The fully-executed agreement is attached for your records.</p>'
-        + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
+        + '<p>Questions? Call or text <strong>' + opCfg.phone + '</strong></p>'
       );
       sendEmail(
         booking.buyer.email,
         'Agreement Fully Executed — ' + confId,
         clientHtml,
-        [{ filename: confId + '-executed-agreement.pdf', content: pdfBase64 }]
+        [{ filename: confId + '-executed-agreement.pdf', content: pdfBase64 }],
+        opCfg.replyTo
       ).catch(function(e){ console.error('Client executed-PDF email failed:', e.message); });
     }
 
-    // Owner email (so Jaren has a copy in inbox)
-    if (process.env.OWNER_EMAIL) {
+    // Owner email (so the operator has a copy in inbox). For Jeff, goes to his
+    // notify list (him + Jaren); for Jaren, just OWNER_EMAIL.
+    const csNotify = (opCfg.notifyEmails && opCfg.notifyEmails.length) ? opCfg.notifyEmails : [process.env.OWNER_EMAIL];
+    for (const recip of csNotify) {
+      if (!recip) continue;
       const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:520px">'
         + '<h2 style="color:#1B2D52">Counter-Signed: ' + (booking.fullName || '') + '</h2>'
-        + '<p>You counter-signed the inspection agreement for <strong>' + (booking.address || '') + '</strong>.</p>'
+        + '<p>The inspection agreement for <strong>' + (booking.address || '') + '</strong> has been counter-signed.</p>'
         + '<p>The fully-executed PDF is attached.</p>'
         + '<p><b>Conf #:</b> ' + confId + '<br>'
         + '<b>Counter-signed:</b> ' + counterSignedDate + ' (AZ)</p>'
         + '</div>';
       sendEmail(
-        process.env.OWNER_EMAIL,
+        recip,
         'COUNTER-SIGNED: ' + (booking.fullName || '') + ' [' + confId + ']',
         ownerHtml,
         [{ filename: confId + '-executed-agreement.pdf', content: pdfBase64 }]
@@ -3341,12 +3675,15 @@ app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
 });
 
 app.get('/admin/csv', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) {
+  const role = adminRole(req);
+  if (!role) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
   }
   try {
-    const result = await pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC');
+    const result = (role === 'jaren')
+      ? await pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC')
+      : await pool.query("SELECT * FROM confirmed_bookings WHERE operator = 'jeff' ORDER BY confirmed_at DESC");
     const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Seller Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid','Agreement Signed','Date Signed'];
     const lines = [headers.join(',')];
     for (const row of result.rows) {
@@ -3392,7 +3729,8 @@ app.get('/admin/csv', adminActionLimiter, async function(req, res) {
 // Usage: /admin/mileage-csv?from=2026-01-01&to=2026-12-31
 // Header row + per-booking rows + a totals summary row at the bottom.
 app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) {
+  const role = adminRole(req);
+  if (!role) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).send('Unauthorized');
   }
@@ -3401,6 +3739,7 @@ app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     return res.status(400).send('from and to query params required, format YYYY-MM-DD');
   }
+  const scoped = role !== 'jaren';
   try {
     const result = await pool.query(
       `SELECT conf_id, data, miles, confirmed_at
@@ -3408,7 +3747,7 @@ app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
        WHERE cancelled_at IS NULL
          AND miles IS NOT NULL
          AND confirmed_at >= $1::date
-         AND confirmed_at <  ($2::date + INTERVAL '1 day')
+         AND confirmed_at <  ($2::date + INTERVAL '1 day')` + (scoped ? " AND operator = 'jeff'" : '') + `
        ORDER BY confirmed_at ASC`,
       [from, to]
     );
@@ -3439,7 +3778,7 @@ app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
 });
 
 app.post('/admin/codes/add', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  if (adminRole(req) !== 'jaren') return res.status(403).json({ error: 'Forbidden' });
   const { code, pct } = req.body;
   if (!code || !pct || isNaN(pct) || pct < 1 || pct > 100) return res.status(400).json({ error: 'Invalid code or percentage' });
   try {
@@ -3449,7 +3788,7 @@ app.post('/admin/codes/add', adminActionLimiter, async function(req, res) {
 });
 
 app.post('/admin/codes/delete', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  if (adminRole(req) !== 'jaren') return res.status(403).json({ error: 'Forbidden' });
   const { code } = req.body;
   try {
     await pool.query('DELETE FROM discount_codes WHERE code = $1', [code]);
@@ -3468,16 +3807,22 @@ app.get('/api/validate-code', async function(req, res) {
 });
 
 app.get('/admin/data', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) {
+  const role = adminRole(req);
+  if (!role) {
     res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  // Jeff's admin is scoped to his own data; Jaren sees everything.
+  const scoped = role !== 'jaren';
+  const opFilterConfirmed = scoped ? " WHERE operator = 'jeff'" : '';
+  // pending rows: keep the existing 48h + non-agree filter, add operator if scoped.
+  const pendingWhere = "WHERE created_at > NOW() - INTERVAL '48 hours' AND token NOT LIKE 'agree_%'" + (scoped ? " AND operator = 'jeff'" : '');
   try {
-    const [bookings, reschedules, codes, pending, mileageAgg] = await Promise.all([
-      pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings ORDER BY confirmed_at DESC'),
+    const [bookings, reschedules, codes, pending, mileageAgg, jeffTally] = await Promise.all([
+      pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings' + opFilterConfirmed + ' ORDER BY confirmed_at DESC'),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
-      pool.query("SELECT token, data, created_at FROM pending_bookings WHERE created_at > NOW() - INTERVAL '48 hours' AND token NOT LIKE 'agree_%' ORDER BY created_at DESC"),
+      pool.query("SELECT token, data, created_at FROM pending_bookings " + pendingWhere + " ORDER BY created_at DESC"),
       // Mileage roll-up — only counts miles on bookings that aren't cancelled.
       // Uses confirmed_at for the cutoff so the tile reflects when the inspection was booked.
       pool.query(`
@@ -3485,11 +3830,20 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
           COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('month', NOW())), 0) AS month_miles,
           COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('year',  NOW())), 0) AS ytd_miles
         FROM confirmed_bookings
-        WHERE cancelled_at IS NULL
+        WHERE cancelled_at IS NULL` + (scoped ? " AND operator = 'jeff'" : '') + `
+      `),
+      // Jeff sub-contractor tally: completed (delivered) Jeff inspections × $50.
+      // Counts reports for Jeff's bookings that have been delivered. Only shown to Jaren.
+      pool.query(`
+        SELECT COUNT(*)::int AS cnt
+        FROM confirmed_bookings cb
+        WHERE cb.operator = 'jeff' AND cb.cancelled_at IS NULL
       `),
     ]);
     const m = mileageAgg.rows[0] || {};
+    const jeffCount = (jeffTally.rows[0] && jeffTally.rows[0].cnt) || 0;
     res.json({
+      role: role,
       bookings: bookings.rows,
       reschedules: reschedules.rows,
       codes: codes.rows,
@@ -3498,6 +3852,8 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
         monthMiles: Number(m.month_miles) || 0,
         ytdMiles:   Number(m.ytd_miles)   || 0,
       },
+      // Only meaningful for Jaren's view; harmless for Jeff (his own count).
+      jeffOwes: { count: jeffCount, rate: 50, total: jeffCount * 50 },
     });
   } catch(e) {
     res.status(500).json({ error: 'DB error' });
@@ -3506,20 +3862,31 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
 
 // Delete a single pending booking (frees its slot immediately)
 app.post('/admin/delete-pending', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const role = adminRole(req);
+  if (!role) return res.status(401).json({ error: 'Unauthorized' });
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'No token' });
   try {
-    await pool.query('DELETE FROM pending_bookings WHERE token = $1', [token]);
+    // Jeff may only delete his own pending rows; Jaren may delete any.
+    if (role === 'jaren') {
+      await pool.query('DELETE FROM pending_bookings WHERE token = $1', [token]);
+    } else {
+      const r = await pool.query("DELETE FROM pending_bookings WHERE token = $1 AND operator = 'jeff' RETURNING token", [token]);
+      if (!r.rows.length) return res.status(403).json({ error: 'Forbidden' });
+    }
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Clear ALL pending bookings — for cleaning up after testing
+// Clear ALL pending bookings — for cleaning up after testing.
+// Scoped: Jeff clears only his own pending rows; Jaren clears all.
 app.post('/admin/clear-all-pending', adminActionLimiter, async function(req, res) {
-  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const role = adminRole(req);
+  if (!role) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const r = await pool.query('DELETE FROM pending_bookings RETURNING token');
+    const r = (role === 'jaren')
+      ? await pool.query('DELETE FROM pending_bookings RETURNING token')
+      : await pool.query("DELETE FROM pending_bookings WHERE operator = 'jeff' RETURNING token");
     res.json({ success: true, deleted: r.rows.length });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -3538,6 +3905,7 @@ app.get('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
     return res.status(401).send('Unauthorized');
   }
   const confId = req.params.confId;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('<h2 style="font-family:sans-serif;padding:60px 24px;text-align:center">Forbidden</h2><p style="text-align:center"><a href="/admin">← Back to admin</a></p>');
   let row;
   try {
     const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
@@ -3995,6 +4363,7 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
 app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const confId = req.params.confId;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
 
   let row;
   try {
@@ -4008,6 +4377,7 @@ app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async fun
   if (row.cancelled_at) return res.status(400).json({ error: 'Booking is cancelled.' });
 
   const d = row.data || {};
+  const opCfg = operatorConfig(row.operator || d.operator);
   const buyer = d.buyer || {};
   if (!buyer.email) return res.status(400).json({ error: 'Buyer has no email on file.' });
   if (!d.agreementToken) return res.status(400).json({ error: 'No hub link available — this booking pre-dates the customer hub feature. Edit and re-save the booking to generate one.' });
@@ -4036,12 +4406,14 @@ app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async fun
       + '<p style="margin:0 0 12px;font-size:.84rem;color:#555">' + escapeHtml(ctaCopy) + '</p>'
       + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
       + '</div>'
-      + '<p>Questions? Call or text <strong>(480) 618-0805</strong></p>'
+      + '<p>Questions? Call or text <strong>' + opCfg.phone + '</strong></p>'
     );
     await sendEmail(
       buyer.email,
       'Your Inspection Hub — ' + (d.dateFmt || '') + ' [' + confId + ']',
-      html
+      html,
+      null,
+      opCfg.replyTo
     );
     res.json({ success: true, sentTo: buyer.email });
   } catch(e) {
@@ -4053,6 +4425,7 @@ app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async fun
 app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const confId = req.params.confId;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
 
   let row;
   try {
@@ -4065,6 +4438,8 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
 
   const old = row.data || {};
   const b   = req.body || {};
+  const opCfg = operatorConfig(row.operator || old.operator);
+  const opId  = getOperator(row.operator || old.operator);
 
   // ── Pull + clip inputs ─────────────────────────────────────
   const newDate    = clip(b.date,    20);
@@ -4260,7 +4635,7 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
     svcLabel !== old.svcLabel ||
     newData.fullName !== old.fullName
   );
-  if (old.calId && calVisibleChanged) {
+  if (old.calId && calVisibleChanged && opId === 'jaren') {
     try {
       const descLines = [
         'Conf: ' + confId, 'Service: ' + svcLabel,
@@ -4330,13 +4705,15 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
               + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
               + '</div>'
             : '')
-        + '<p>If anything looks wrong or you have questions, please call or text <strong>(480) 618-0805</strong>.</p>'
+        + '<p>If anything looks wrong or you have questions, please call or text <strong>' + opCfg.phone + '</strong>.</p>'
       );
 
       await sendEmail(
         newBuyer.email,
         'Inspection Updated — ' + dateFmt + ' @ ' + newTime + ' [' + confId + ']',
-        notifyHtml
+        notifyHtml,
+        null,
+        opCfg.replyTo
       );
       notified = true;
     } catch(e) {
