@@ -1986,6 +1986,26 @@ app.get(['/book-jeff', '/jeff'], function(req, res) {
   res.send(renderJeffIntakePage());
 });
 
+// ── SUBDOMAIN ROOT ROUTING ────────────────────────────────────
+// Clean subdomains so links on business cards have nothing trailing:
+//   jeff.santanpropertyinspections.com  → Jeff's intake form (served here)
+//   book.santanpropertyinspections.com  → redirect to the main public site
+// Detection is by the Host header's first label. Falls through harmlessly on
+// the raw Railway URL or any other host (404 as before — backend has no other
+// root page; the public marketing site is hosted separately).
+app.get('/', function(req, res) {
+  const host = String(req.headers.host || '').toLowerCase();
+  const sub = host.split(':')[0].split('.')[0];
+  if (sub === 'jeff') {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    return res.send(renderJeffIntakePage());
+  }
+  if (sub === 'book') {
+    return res.redirect(302, 'https://santanpropertyinspections.com');
+  }
+  return res.status(404).send('Not found.');
+});
+
 // ── CONFIRM BOOKING ───────────────────────────────────────────
 app.get('/confirm/:token', async function(req, res) {
   // Verify HMAC signature before doing any DB work. Owner-facing endpoint so
