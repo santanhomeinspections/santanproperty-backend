@@ -59,6 +59,49 @@ function withSig(url, token) {
   return url + sep + 's=' + signToken(token);
 }
 
+// ── ADMIN SESSION COOKIE ──────────────────────────────────────
+// Lightweight signed-cookie auth for the admin (no express-session dependency).
+// A login cookie is "operator.expiryMs.hmac" where the hmac signs
+// "operator.expiryMs" with the same HMAC secret used for links. adminRole()
+// reads this cookie. Valid for 30 days; sliding renewal happens on each login.
+const ADMIN_COOKIE = 'stp_admin';
+const ADMIN_SESSION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function makeAdminCookie(operator) {
+  const exp = Date.now() + ADMIN_SESSION_MS;
+  const payload = operator + '.' + exp;
+  const sig = crypto.createHmac('sha256', LINK_HMAC_SECRET).update(payload).digest('hex');
+  return payload + '.' + sig;
+}
+// Returns the operator from a valid cookie value, or null.
+function readAdminCookie(value) {
+  if (!value || typeof value !== 'string') return null;
+  const parts = value.split('.');
+  if (parts.length !== 3) return null;
+  const [operator, expStr, sig] = parts;
+  const exp = Number(expStr);
+  if (!exp || Date.now() > exp) return null;
+  const expected = crypto.createHmac('sha256', LINK_HMAC_SECRET).update(operator + '.' + exp).digest('hex');
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length) return null;
+  try { if (!crypto.timingSafeEqual(a, b)) return null; } catch (_) { return null; }
+  if (operator !== 'jaren' && operator !== 'jeff') return null;
+  return operator;
+}
+// Minimal cookie parser — avoids adding the cookie-parser dependency.
+function getCookie(req, name) {
+  const raw = req.headers['cookie'];
+  if (!raw) return null;
+  const parts = raw.split(';');
+  for (let i = 0; i < parts.length; i++) {
+    const idx = parts[i].indexOf('=');
+    if (idx === -1) continue;
+    const k = parts[i].slice(0, idx).trim();
+    if (k === name) return decodeURIComponent(parts[i].slice(idx + 1).trim());
+  }
+  return null;
+}
+
 // ── INPUT VALIDATION ──────────────────────────────────────────
 // Server-side regex checks for email and phone format. Booking form validates
 // in the browser, but the server takes whatever it's given — these guard the
@@ -2050,34 +2093,59 @@ app.get('/confirm/:token', async function(req, res) {
   const endDT2   = new Date(startDT2.getTime() + (totalMins||120)*60000);
 
   let calId = null;
-  // Calendar is only integrated for jaren. Jeff (and any future operator without
-  // a calendar) skips event creation entirely — he manages his own schedule.
-  if (opId === 'jaren') {
+  // Calendar integration for BOTH operators.
+  //  - jaren  → CALENDAR_ID (his calendar), buyer invited as attendee.
+  //  - jeff   → CALENDAR_ID_JEFF (separate calendar Jaren owns + shares to Jeff);
+  //             Jeff's Gmail is invited so the job lands on his phone calendar.
+  // If an operator has no calendar ID configured, event creation is skipped
+  // gracefully (no crash) — so jeff's bookings still work even before the
+  // CALENDAR_ID_JEFF env var is set.
+  const targetCalId = (opId === 'jeff') ? (process.env.CALENDAR_ID_JEFF || null) : CALENDAR_ID;
+  if (targetCalId) {
    try {
+    // Blocked, labeled layout (clean style). Only fields actually collected
+    // are shown; missing optional fields are omitted rather than left blank.
     const descLines = [
-      'Conf: ' + confId, 'Service: ' + svcLabel,
-      addons.length ? 'Add-ons: ' + addonsLine : null,
-      'Address: ' + address, 'Sq Ft: ' + sqft + ' | Year: ' + yearBuilt,
-      'Total: $' + finalPrice + (tripCharge.apply ? ' (incl. trip charge)' : ''), '',
-      'BUYER: ' + fullName + ' | ' + buyer.phone + ' | ' + buyer.email,
-      hasBA ? 'BUYERS AGENT: ' + baName + (baBrok ? ' — ' + baBrok : '') + (baPhone ? ' | ' + baPhone : '') : 'BUYERS AGENT: None provided',
-      sellerAgent && sellerAgent.name ? 'SELLERS AGENT: ' + sellerAgent.name + (sellerAgent.brokerage ? ' — ' + sellerAgent.brokerage : '') + ' | ' + (sellerAgent.phone||'—') : null,
-      notes ? 'Notes: ' + notes : null,
-      extraEmails && extraEmails.length ? 'Extra report recipients: ' + extraEmails.join(', ') : null,
-      discountCode ? 'Discount: ' + discountCode + ' (' + discountPct + '% off — −$' + discountAmount + ')' : null,
-    ].filter(Boolean).join('\n');
+      'BUYER',
+      '  ' + fullName + (buyer.phone ? '  |  ' + buyer.phone : '') + (buyer.email ? '  |  ' + buyer.email : ''),
+      '',
+      hasBA
+        ? 'BUYER\u2019S AGENT\n  ' + baName + (baBrok ? '  \u2014  ' + baBrok : '') + (baPhone ? '  |  ' + baPhone : '') + (baEmail ? '  |  ' + baEmail : '')
+        : 'BUYER\u2019S AGENT\n  None provided',
+      '',
+      (sellerAgent && sellerAgent.name)
+        ? 'SELLER\u2019S AGENT\n  ' + sellerAgent.name + (sellerAgent.brokerage ? '  \u2014  ' + sellerAgent.brokerage : '') + (sellerAgent.phone ? '  |  ' + sellerAgent.phone : '') + '\n'
+        : null,
+      'SERVICES (Total: $' + finalPrice + (tripCharge.apply ? ', incl. trip charge' : '') + ')',
+      '  ' + svcLabel + (addons.length ? '  +  ' + addonsLine : ''),
+      '',
+      'DETAILS',
+      '  Conf #: ' + confId,
+      '  Year Built: ' + (yearBuilt || '\u2014'),
+      '  Square Footage: ' + (sqft || '\u2014'),
+      discountCode ? '  Discount: ' + discountCode + ' (' + discountPct + '% off \u2212 \u2212$' + discountAmount + ')' : null,
+      (notes) ? '  Notes: ' + notes : null,
+      extraEmails && extraEmails.length ? '  Extra report recipients: ' + extraEmails.join(', ') : null,
+    ].filter(function(x){ return x !== null && x !== undefined; }).join('\n');
+
+    // Attendees: always the buyer; for Jeff's bookings also invite Jeff's Gmail
+    // so the event appears on his own calendar.
+    const attendees = [{ email: buyer.email, displayName: fullName }];
+    if (opId === 'jeff') {
+      attendees.push({ email: opCfg.replyTo, displayName: opCfg.inspectorName });
+    }
 
     const ev = {
-      summary: svcLabel + ' — ' + fullName, location: address, description: descLines,
+      summary: svcLabel + ' \u2014 ' + fullName, location: address, description: descLines,
       start: { dateTime: startDT2.toISOString(), timeZone: TIMEZONE },
       end:   { dateTime: endDT2.toISOString(),   timeZone: TIMEZONE },
       colorId: '5',
-      attendees: [{ email: buyer.email, displayName: fullName }],
+      attendees: attendees,
       reminders: { useDefault: false, overrides: [{ method:'email', minutes:24*60 },{ method:'popup', minutes:60 }] },
     };
-    const r = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: ev, sendUpdates:'all' });
+    const r = await calendar.events.insert({ calendarId: targetCalId, resource: ev, sendUpdates:'all' });
     calId = r.data.id;
-    console.log('Calendar event created: ' + calId);
+    console.log('Calendar event created (' + opId + '): ' + calId);
    } catch(e) { console.error('Calendar:', e.message); }
   }
 
@@ -2607,8 +2675,7 @@ app.get('/i/:token/report.pdf', agreementLimiter, async function(req, res) {
 // peek at in-progress reports too.
 app.get('/admin/report-pdf/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   if (!(await roleCanTouchBooking(adminRole(req), req.params.confId))) return res.status(403).send('Forbidden');
   const info = await getReportInfoForConfId(req.params.confId);
@@ -2820,9 +2887,13 @@ function safeEq(input, secret) {
 
 // Returns the operator role of the authenticated admin: 'jaren' (full access,
 // sees every operator), 'jeff' (scoped to his own data), or null (unauthorized).
+// Reads the signed session cookie set at login. (Replaces the old Basic Auth
+// header approach — the styled /admin/login page issues the cookie.)
 function adminRole(req) {
-  const auth = req.headers['authorization'];
-  const pass = auth && auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString().split(':')[1] : null;
+  return readAdminCookie(getCookie(req, ADMIN_COOKIE));
+}
+// Given a submitted password, return the operator it authenticates as, or null.
+function passwordRole(pass) {
   if (pass == null) return null;
   if (safeEq(pass, ADMIN_PASSWORD)) return 'jaren';
   if (ADMIN_PASSWORD_JEFF && safeEq(pass, ADMIN_PASSWORD_JEFF)) return 'jeff';
@@ -2845,11 +2916,72 @@ async function roleCanTouchBooking(role, confId) {
   } catch (_) { return false; }
 }
 
+// ── ADMIN LOGIN (styled, session-cookie based) ────────────────
+// Replaces the old browser Basic Auth popup with a real login page.
+// Same password(s) as before: ADMIN_PASSWORD → jaren (sees all),
+// ADMIN_PASSWORD_JEFF → jeff (scoped). On success we set a signed cookie.
+app.get('/admin/login', adminAuthLimiter, function(req, res) {
+  // Already logged in? Skip straight to the dashboard.
+  if (adminRole(req)) return res.redirect('/admin');
+  const err = req.query.e ? '<div class="err">Incorrect password. Please try again.</div>' : '';
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>San Tan Admin — Sign In</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:radial-gradient(900px 500px at 50% -10%,#1a2f56 0%,#0F1C35 60%,#0a1426 100%);
+    min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .box{width:100%;max-width:360px;background:#fffdf8;border-radius:16px;padding:32px 28px;
+    box-shadow:0 24px 60px -18px rgba(0,0,0,.6);text-align:center}
+  .brand{font-family:Georgia,serif;font-weight:700;color:#C9A84C;letter-spacing:.18em;font-size:1rem;text-transform:uppercase}
+  .sub{color:#8a8678;font-size:.62rem;letter-spacing:.4em;text-transform:uppercase;margin-top:3px;margin-bottom:24px}
+  h1{font-size:1.15rem;color:#0F1C35;margin-bottom:4px}
+  p.note{color:#7a7a7a;font-size:.82rem;margin-bottom:20px}
+  label{display:block;text-align:left;font-size:.78rem;font-weight:600;color:#445;margin-bottom:6px}
+  input{width:100%;padding:12px 13px;border:1px solid #d4cdbf;border-radius:9px;font-size:1rem;background:#fff}
+  input:focus{outline:none;border-color:#C9A84C;box-shadow:0 0 0 3px rgba(201,168,76,.18)}
+  button{width:100%;margin-top:16px;background:linear-gradient(180deg,#E8C97A,#C9A84C);color:#0F1C35;
+    font-weight:700;font-size:1rem;padding:13px;border:none;border-radius:9px;cursor:pointer}
+  button:hover{filter:brightness(1.04)}
+  .err{background:#FDECEA;color:#922;border:1px solid #f5c6cb;border-radius:8px;padding:10px;font-size:.85rem;margin-bottom:16px}
+</style></head>
+<body>
+  <form class="box" method="POST" action="/admin/login">
+    <div class="brand">San Tan Property</div>
+    <div class="sub">Inspections</div>
+    <h1>Admin Sign In</h1>
+    <p class="note">Enter your password to continue.</p>
+    ${err}
+    <label for="pw">Password</label>
+    <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">Sign In</button>
+  </form>
+</body></html>`);
+});
+
+app.post('/admin/login', adminAuthLimiter, function(req, res) {
+  const role = passwordRole((req.body && req.body.password) || '');
+  if (!role) return res.redirect('/admin/login?e=1');
+  res.cookie(ADMIN_COOKIE, makeAdminCookie(role), {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    maxAge: ADMIN_SESSION_MS,
+    path: '/',
+  });
+  res.redirect('/admin');
+});
+
+app.get('/admin/logout', function(req, res) {
+  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.redirect('/admin/login');
+});
+
 app.get('/admin', adminAuthLimiter, function(req, res) {
-  if (!checkAdmin(req)) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
-  }
+  if (!checkAdmin(req)) return res.redirect('/admin/login');
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -2897,7 +3029,7 @@ tr:hover td{background:rgba(201,168,76,.04);}
 <body>
 <nav>
   <h1>San Tan Property Inspections — Admin</h1>
-  <span id="lastRefresh"></span>
+  <span style="display:flex;align-items:center;gap:14px"><span id="lastRefresh"></span><a href="/admin/logout" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Sign Out</a></span>
 </nav>
 <div class="wrap">
   <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
@@ -2960,6 +3092,8 @@ async function load() {
       fetch('/admin/data'),
       fetch('/admin/reports-map').catch(function(){ return null; }),
     ]);
+    // Session expired or not logged in → bounce to the login page.
+    if (r.status === 401) { window.location.href = '/admin/login'; return; }
     const d = await r.json();
     // Scoped-view indicator: when Jeff is logged in, make clear he's seeing only his data.
     if (d.role && d.role !== 'jaren') {
@@ -3406,8 +3540,9 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   // Calendar event is always deleted regardless of silent mode — keeping it
   // on the calendar after cancellation would create real-world confusion.
   if (d.calId) {
+    const delCalId = (getOperator(booking.operator || d.operator) === 'jeff') ? (process.env.CALENDAR_ID_JEFF || CALENDAR_ID) : CALENDAR_ID;
     try {
-      await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: d.calId, sendUpdates: 'none' });
+      await calendar.events.delete({ calendarId: delCalId, eventId: d.calId, sendUpdates: 'none' });
     } catch(e) { console.warn('Calendar delete failed:', e.message); }
   }
 
@@ -3516,9 +3651,10 @@ app.post('/admin/hard-delete-booking', adminActionLimiter, async function(req, r
   if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
   try {
     // Best-effort: try to delete calendar event if one was created
-    const r = await pool.query('SELECT data FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    const r = await pool.query('SELECT data, operator FROM confirmed_bookings WHERE conf_id = $1', [confId]);
     if (r.rows.length && r.rows[0].data && r.rows[0].data.calId) {
-      try { await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: r.rows[0].data.calId, sendUpdates: 'none' }); }
+      const delCalId = (getOperator(r.rows[0].operator || r.rows[0].data.operator) === 'jeff') ? (process.env.CALENDAR_ID_JEFF || CALENDAR_ID) : CALENDAR_ID;
+      try { await calendar.events.delete({ calendarId: delCalId, eventId: r.rows[0].data.calId, sendUpdates: 'none' }); }
       catch(e) { console.warn('Calendar delete (hard-delete):', e.message); }
     }
     await pool.query('DELETE FROM confirmed_bookings WHERE conf_id = $1', [confId]);
@@ -3530,8 +3666,7 @@ app.post('/admin/hard-delete-booking', adminActionLimiter, async function(req, r
 // Stream signed agreement PDF from R2 to admin browser
 app.get('/admin/agreement-pdf/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   const { confId } = req.params;
   if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('Forbidden');
@@ -3553,8 +3688,7 @@ app.get('/admin/agreement-pdf/:confId', adminActionLimiter, async function(req, 
 // Stream the fully-executed (counter-signed) agreement PDF to admin browser.
 app.get('/admin/executed-pdf/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   const { confId } = req.params;
   if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('Forbidden');
@@ -3697,8 +3831,7 @@ app.post('/admin/counter-sign', adminActionLimiter, async function(req, res) {
 app.get('/admin/csv', adminActionLimiter, async function(req, res) {
   const role = adminRole(req);
   if (!role) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   try {
     const result = (role === 'jaren')
@@ -3751,8 +3884,7 @@ app.get('/admin/csv', adminActionLimiter, async function(req, res) {
 app.get('/admin/mileage-csv', adminActionLimiter, async function(req, res) {
   const role = adminRole(req);
   if (!role) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   const from = String(req.query.from || '');
   const to   = String(req.query.to   || '');
@@ -3829,7 +3961,6 @@ app.get('/api/validate-code', async function(req, res) {
 app.get('/admin/data', adminActionLimiter, async function(req, res) {
   const role = adminRole(req);
   if (!role) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
     return res.status(401).json({ error: 'Unauthorized' });
   }
   // Jeff's admin is scoped to his own data; Jaren sees everything.
@@ -3921,8 +4052,7 @@ app.post('/admin/clear-all-pending', adminActionLimiter, async function(req, res
 // Submit hits POST /admin/booking/:confId — see that handler for the save logic.
 app.get('/admin/booking/:confId', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) {
-    res.set('WWW-Authenticate', 'Basic realm="San Tan Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.redirect('/admin/login');
   }
   const confId = req.params.confId;
   if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).send('<h2 style="font-family:sans-serif;padding:60px 24px;text-align:center">Forbidden</h2><p style="text-align:center"><a href="/admin">← Back to admin</a></p>');
@@ -4655,27 +4785,38 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
     svcLabel !== old.svcLabel ||
     newData.fullName !== old.fullName
   );
-  if (old.calId && calVisibleChanged && opId === 'jaren') {
+  const editCalId = (opId === 'jeff') ? (process.env.CALENDAR_ID_JEFF || null) : CALENDAR_ID;
+  if (old.calId && calVisibleChanged && editCalId) {
     try {
       const descLines = [
-        'Conf: ' + confId, 'Service: ' + svcLabel,
-        newAddons.length ? 'Add-ons: ' + addonsLine : null,
-        'Address: ' + newAddress, 'Sq Ft: ' + newSqft + ' | Year: ' + newYear,
-        'Total: $' + finalPrice + (tripCharge.apply ? ' (incl. trip charge)' : ''), '',
-        'BUYER: ' + newData.fullName + ' | ' + newBuyer.phone + ' | ' + newBuyer.email,
-        (newBA.name || newBA.email || newBA.phone) ? 'BUYERS AGENT: ' + newBA.name + (newBA.brokerage ? ' — ' + newBA.brokerage : '') + (newBA.phone ? ' | ' + newBA.phone : '') : 'BUYERS AGENT: None provided',
-        (newSA.name || newSA.email || newSA.phone) ? 'SELLERS AGENT: ' + newSA.name + (newSA.brokerage ? ' — ' + newSA.brokerage : '') + ' | ' + (newSA.phone||'—') : null,
-        newInternalNotes ? 'Internal: ' + newInternalNotes : null,
-        newNotes ? 'Client notes: ' + newNotes : null,
+        'BUYER',
+        '  ' + newData.fullName + (newBuyer.phone ? '  |  ' + newBuyer.phone : '') + (newBuyer.email ? '  |  ' + newBuyer.email : ''),
+        '',
+        (newBA.name || newBA.email || newBA.phone)
+          ? 'BUYER\u2019S AGENT\n  ' + newBA.name + (newBA.brokerage ? '  \u2014  ' + newBA.brokerage : '') + (newBA.phone ? '  |  ' + newBA.phone : '') + (newBA.email ? '  |  ' + newBA.email : '')
+          : 'BUYER\u2019S AGENT\n  None provided',
+        '',
+        (newSA.name || newSA.email || newSA.phone)
+          ? 'SELLER\u2019S AGENT\n  ' + newSA.name + (newSA.brokerage ? '  \u2014  ' + newSA.brokerage : '') + (newSA.phone ? '  |  ' + newSA.phone : '') + '\n'
+          : null,
+        'SERVICES (Total: $' + finalPrice + (tripCharge.apply ? ', incl. trip charge' : '') + ')',
+        '  ' + svcLabel + (newAddons.length ? '  +  ' + addonsLine : ''),
+        '',
+        'DETAILS',
+        '  Conf #: ' + confId,
+        '  Year Built: ' + (newYear || '\u2014'),
+        '  Square Footage: ' + (newSqft || '\u2014'),
+        (newNotes || newInternalNotes) ? '  Notes: ' + [newNotes, newInternalNotes].filter(Boolean).join(' | ') : null,
+        '',
         '[Edited via admin ' + new Date().toLocaleString('en-US', { timeZone: TIMEZONE }) + ']',
-      ].filter(Boolean).join('\n');
+      ].filter(function(x){ return x !== null && x !== undefined; }).join('\n');
 
       await calendar.events.update({
-        calendarId: CALENDAR_ID,
+        calendarId: editCalId,
         eventId: old.calId,
         sendUpdates: 'none',  // Suppress Google's own "event changed" emails — we send our own when notifyClient is true.
         resource: {
-          summary: svcLabel + ' — ' + newData.fullName,
+          summary: svcLabel + ' \u2014 ' + newData.fullName,
           location: newAddress,
           description: descLines,
           start: { dateTime: startDT.toISOString(), timeZone: TIMEZONE },
