@@ -2046,6 +2046,10 @@ app.get('/', function(req, res) {
   if (sub === 'book') {
     return res.redirect(302, 'https://santanpropertyinspections.com');
   }
+  if (sub === 'admin') {
+    // Bare admin subdomain → send to the login page (or dashboard if already in).
+    return res.redirect(302, '/admin');
+  }
   return res.status(404).send('Not found.');
 });
 
