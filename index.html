@@ -363,7 +363,6 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <a href="#booking" class="btn-p">Book Online — Instant Availability</a>
     <a href="#pricing" class="btn-o">See Pricing</a>
   </div>
-  <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener" style="display:inline-block;margin-top:22px;color:#BEC8D8;font-size:.85rem;text-decoration:none;border-bottom:1px dashed rgba(190,200,216,.4);padding-bottom:2px;transition:color .2s,border-color .2s" onmouseover="this.style.color='#C9A84C';this.style.borderColor='#C9A84C'" onmouseout="this.style.color='#BEC8D8';this.style.borderColor='rgba(190,200,216,.4)'">📄 See a Sample Report (PDF)</a>
 </section>
 
 <div class="trust-bar">
@@ -439,7 +438,6 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <span>Same-Day Reports</span>
         </div>
         <div class="about-ctas">
-          <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener" class="btn-sample">📄 See a Sample Report</a>
           <a href="#reviews" class="btn-reviews">★ Google Reviews</a>
         </div>
       </div>
@@ -824,7 +822,6 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
       <a href="#pricing">Warranty Inspection</a>
       <a href="#pricing">Termite / WDO</a>
       <a href="#pricing">Pool &amp; Spa</a>
-      <a href="/sample-inspection-report.pdf" target="_blank" rel="noopener">📄 Sample Report (PDF)</a>
       <a href="#reviews">★ Google Reviews</a>
     </div>
     <div class="fc">
@@ -1292,7 +1289,7 @@ window.addEventListener('scroll',function(){
 });
 
 function showToast(msg,isErr=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');void t.offsetWidth;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3800);}
-document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){const t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
+document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click',function(e){var href=this.getAttribute('href');if(href==='#privacy-policy'||href==='#terms-and-conditions'||href==='#inspection-agreement')return;const t=document.querySelector(href);if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth'});document.getElementById('navLinks').classList.remove('open');}});});
 </script>
 
 <div id="inspection-agreement" style="display:none;max-width:800px;margin:80px auto;padding:40px;font-family:Georgia,serif;color:#333;line-height:1.8;">
@@ -1300,7 +1297,7 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{a.addEventListener('click'
   <p><strong>San Tan Property Inspections</strong> — Certified Home Inspector — BTR #79346</p>
   <p style="font-size:.85rem;color:#8C7B6B;margin:12px 0 24px">This is a summary of our inspection agreement. The full agreement is signed on the day of inspection. <a href="SanTan_Inspection_Agreement.docx" style="color:#C9A84C;font-weight:600" download>Download full agreement (.docx)</a></p>
   <h2>Scope</h2>
-  <p>We perform a non-invasive visual inspection of accessible systems and components including roof, structure, electrical, plumbing, HVAC, and interior/exterior. A written report with photos is delivered the same day as the inspection — after payment is received.</p>
+  <p>We perform a non-invasive visual inspection of accessible systems and components including roof covering, flashings, gutters, and drainage; exterior cladding, grading, and walkways; electrical service, panels, wiring, and outlets; plumbing supply, drain, waste, vent, and water heater; foundation, structure, and visible framing; garage doors, openers, and firewall; heating and cooling equipment and distribution; interior doors, windows, floors, walls, ceilings, stairs, and railings; attic insulation and ventilation; and built-in kitchen appliances. A written report with photos is delivered the same day as the inspection — after payment is received.</p>
   <h2>Exclusions</h2>
   <p>We do not inspect for radon, mold, asbestos, lead, code compliance, termites (unless WDO add-on purchased), pools/spas (unless add-on purchased), or auxiliary systems such as alarm, solar, or sprinkler systems.</p>
   <h2>Payment</h2>
