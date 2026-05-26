@@ -1955,7 +1955,18 @@ function renderJeffIntakePage() {
       <div><label>Phone</label><input id="aPhone" inputmode="tel" autocomplete="off"></div>
     </div>
     <label>Brokerage</label><input id="aBrok" autocomplete="off">
-    <label>Notes for Jeff</label><textarea id="notes" placeholder="Gate code, special requests, etc."></textarea>
+  </div>
+
+  <div class="card">
+    <h2>Listing / Seller's Agent (optional)</h2>
+    <p style="margin:-6px 0 10px;color:#6a6a6a;font-size:.82rem">This is who Jeff coordinates with for access (lockbox/CBS code, utilities, etc.).</p>
+    <label>Name</label><input id="sName" autocomplete="off">
+    <div class="row">
+      <div><label>Email</label><input id="sEmail" type="email" autocomplete="off"></div>
+      <div><label>Phone</label><input id="sPhone" inputmode="tel" autocomplete="off"></div>
+    </div>
+    <label>Brokerage</label><input id="sBrok" autocomplete="off">
+    <label>Notes for Jeff</label><textarea id="notes" placeholder="Gate code, lockbox/CBS code, special requests, etc."></textarea>
   </div>
 
   <div class="price">
@@ -1968,6 +1979,24 @@ function renderJeffIntakePage() {
 </div>
 
 <script>
+// Google Places address autocomplete — same key/library as the main site.
+// Called by the Maps script via &callback=initAutocomplete. Must be global.
+function initAutocomplete(){
+  try {
+    var input = document.getElementById('address');
+    if (!input || !window.google || !google.maps || !google.maps.places) return;
+    var ac = new google.maps.places.Autocomplete(input, {
+      types: ['address'],
+      componentRestrictions: { country: 'us' },
+      fields: ['formatted_address']
+    });
+    ac.addListener('place_changed', function(){
+      var place = ac.getPlace();
+      if (place && place.formatted_address) input.value = place.formatted_address;
+    });
+    input.addEventListener('keydown', function(e){ if (e.key === 'Enter') e.preventDefault(); });
+  } catch(e) { /* autocomplete is a nice-to-have; never block the form */ }
+}
 (function(){
   var PRICE_BASE = {1000:400,1500:425,2000:450,2500:475,3000:550,3500:600,4000:650,4500:675,9999:750};
   var ADDON_P = {termite:85,pool:60,spa:40,shed:50};
@@ -2002,6 +2031,7 @@ function renderJeffIntakePage() {
       totalMins:120,
       buyer:{firstName:document.getElementById('bFirst').value.trim(),lastName:document.getElementById('bLast').value.trim(),email:document.getElementById('bEmail').value.trim(),phone:document.getElementById('bPhone').value.trim()},
       buyerAgent:{name:document.getElementById('aName').value.trim(),email:document.getElementById('aEmail').value.trim(),phone:document.getElementById('aPhone').value.trim(),brokerage:document.getElementById('aBrok').value.trim()},
+      sellerAgent:{name:document.getElementById('sName').value.trim(),email:document.getElementById('sEmail').value.trim(),phone:document.getElementById('sPhone').value.trim(),brokerage:document.getElementById('sBrok').value.trim()},
       notes:document.getElementById('notes').value.trim()
     };
     if(!payload.address||!payload.sqft||!payload.date||!payload.time||!payload.buyer.firstName||!payload.buyer.email||!payload.buyer.phone){
@@ -2021,6 +2051,7 @@ function renderJeffIntakePage() {
   });
 })();
 </script>
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBCNujdEjf3Gw51CJF1gPuANtaS_2_LOdI&libraries=places&callback=initAutocomplete" async defer></script>
 </body></html>`;
 }
 
