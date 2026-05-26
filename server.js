@@ -764,7 +764,27 @@ HOME INSPECTION AGREEMENT
 1. SCOPE OF INSPECTION
 The Inspector will perform a non-invasive visual inspection of the accessible systems and components of the property in accordance with the Standards of Professional Practice for Arizona Home Inspectors as adopted by the Arizona State Board of Technical Registration (available at btr.az.gov). The inspection will produce a written report identifying material defects observed at the time of inspection. The report will be delivered the same day as the inspection.
 
-The standard inspection covers: Roof; Exterior; Electrical System; Plumbing System; Basement, Foundation and Structure; Garage; Heating and Cooling; Doors, Windows and Interior; Insulation and Ventilation; Built-In Kitchen Appliances.
+The standard inspection covers the following systems and components:
+
+ROOF: Roof covering materials (shingles, tile, foam, membrane); flashings; roof drainage (gutters, downspouts, and extensions); skylights, chimneys, and roof penetrations; condition of visible roof structure from accessible areas.
+
+EXTERIOR: Wall cladding, trim, and fascia; eaves, soffits, and exterior doors; windows and window operation from exterior; walkways, driveways, patios, and steps; grading and surface drainage at the foundation perimeter; fences and retaining walls where they affect the structure.
+
+ELECTRICAL SYSTEM: Service entrance conductors and service equipment; main and sub-panel(s) including breakers and fuses; grounding and bonding; visible branch circuit wiring; outlets, switches, and fixtures (tested via spot checks); GFCI and AFCI protection where required; smoke and carbon monoxide detectors (presence observed, not tested).
+
+PLUMBING SYSTEM: Main water supply, shut-off, and water meter location; interior water supply lines and visible distribution; drain, waste, and vent pipes; water heater(s) including capacity, condition, safety devices, and approximate age; sump pumps if present; functional flow and drainage at fixtures.
+
+BASEMENT, FOUNDATION, AND STRUCTURE: Foundation type and visible condition; evidence of moisture intrusion, efflorescence, or staining; basement or crawl space access and conditions; visible structural framing including floor joists, beams, and columns where accessible; evidence of settlement, movement, or significant cracking.
+
+GARAGE: Garage door(s), openers, and auto-reverse safety function; firewall and fire-rated door between garage and living space; vehicle door operation and weatherstripping; electrical and lighting within the garage.
+
+HEATING AND COOLING: Heating equipment type, energy source, and approximate age; cooling (air conditioning) equipment type and approximate age; visible distribution systems (ductwork, registers); normal operating controls; flue pipes, chimneys, and venting for combustion appliances; filter condition observed.
+
+DOORS, WINDOWS, AND INTERIOR: Interior doors and hardware; windows including sash operation, locking hardware, and glazing condition (visible fogging/seal failure noted); floors, walls, and ceilings for evidence of moisture, staining, or significant defects; stairways, railings, and guardrails; representative sample of accessible interior components.
+
+INSULATION AND VENTILATION: Insulation type and approximate depth in accessible attic areas; vapor barriers where visible; attic ventilation (ridge, soffit, gable, or power vents); bathroom, kitchen, and laundry exhaust fan venting to the exterior where accessible; crawl space ventilation where applicable.
+
+BUILT-IN KITCHEN APPLIANCES: Dishwasher (operated through a cycle); range/cooktop and oven (operated and tested for heating); built-in microwave (operated); garbage disposal (operated); exhaust fan/range hood (operated); refrigerator is not included unless specifically agreed to in writing.
 
 Any add-on services (such as pool, fireplace, infrared camera inspection, or outbuilding) are performed in addition to the standard inspection and are subject to the same terms of this Agreement. Add-on services must be agreed upon in writing prior to the inspection and are reflected in the booking confirmation.
 
