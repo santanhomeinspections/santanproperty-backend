@@ -2239,7 +2239,7 @@ app.get('/confirm/:token', async function(req, res) {
     // Sends the hub URL — single link that opens the status page where the
     // client can sign the agreement, reschedule, or check report status.
     await sms(buyer.phone,
-      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + (baPhone ? '\n\nYour agent ' + (baName ? baName.split(\' \')[0] : 'your agent') + ' has also been notified.' : '') + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + (baPhone ? '\n\nYour agent ' + (baName ? baName.split(' ')[0] : 'your agent') + ' has also been notified.' : '') + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
 
     // SMS - buyer agent (only if phone provided)
