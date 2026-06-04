@@ -608,7 +608,7 @@ async function checkTripCharge(address) {
 }
 
 // ── EMAIL ─────────────────────────────────────────────────────
-async function sendEmail(to, subject, html, attachments, replyTo) {
+async function sendEmail(to, subject, html, attachments, replyTo, cc) {
   // Strip CRLF from subject to defang header injection via user-controlled name fields
   // (e.g. a booker named "Jane\r\nBcc: leak@evil.com" would otherwise inject a Bcc).
   const safeSubject = String(subject || '').replace(/[\r\n]+/g, ' ').slice(0, 500);
@@ -624,6 +624,7 @@ async function sendEmail(to, subject, html, attachments, replyTo) {
       html: html,
     };
     if (attachments && attachments.length) body.attachments = attachments;
+    if (cc) body.cc = cc;
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       signal: controller.signal,
@@ -1817,7 +1818,7 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   const confirmUrl = withSig(BASE_URL + '/confirm/' + token, token);
   const cancelUrl  = withSig(BASE_URL + '/cancel/'  + token, token);
 
-  const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + escapeHtml(sellerAgent.name) + (sellerAgent.brokerage ? ' — ' + escapeHtml(sellerAgent.brokerage) : '') + '<br>Phone: ' + escapeHtml(sellerAgent.phone||'—') + '</p>' : '';
+  const sellerLineOwner    = sellerAgent && sellerAgent.name ? '<p><b>Seller Agent:</b> ' + escapeHtml(sellerAgent.name) + (sellerAgent.brokerage ? ' — ' + escapeHtml(sellerAgent.brokerage) : '') + '<br>Phone: ' + escapeHtml(sellerAgent.phone||'—') + '<br>Email: ' + (sellerAgent.email ? escapeHtml(sellerAgent.email) : '<span style="color:#C0392B">not provided — no email will be sent</span>') + '</p>' : '';
   const tripLineOwner      = trip.apply ? '<p style="background:#FFF3CD;padding:10px;border-radius:6px">Trip charge: $' + TRIP_CHARGE_AMT + ' (' + Number(trip.miles||0) + ' miles)</p>' : '';
   const notesLineOwner     = notes ? '<p><b>Notes:</b> ' + escapeHtml(notes) + '</p>' : '';
   const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + escapeHtml(extraEmails.join(', ')) + '</p>' : '';
@@ -1978,7 +1979,7 @@ function renderJeffIntakePage() {
   </div>
 
   <div class="card">
-    <h2>Listing / Seller's Agent (optional)</h2>
+    <h2>Listing Agent (optional)</h2>
     <p style="margin:-6px 0 10px;color:#6a6a6a;font-size:.82rem">This is who Jeff coordinates with for access (lockbox/CBS code, utilities, etc.).</p>
     <label>Name</label><input id="sName" autocomplete="off">
     <div class="row">
@@ -2169,7 +2170,7 @@ app.get('/confirm/:token', async function(req, res) {
         : 'BUYER\u2019S AGENT\n  None provided',
       '',
       (sellerAgent && sellerAgent.name)
-        ? 'SELLER\u2019S AGENT\n  ' + sellerAgent.name + (sellerAgent.brokerage ? '  \u2014  ' + sellerAgent.brokerage : '') + (sellerAgent.phone ? '  |  ' + sellerAgent.phone : '') + '\n'
+        ? 'LISTING AGENT\n  ' + sellerAgent.name + (sellerAgent.brokerage ? '  \u2014  ' + sellerAgent.brokerage : '') + (sellerAgent.phone ? '  |  ' + sellerAgent.phone : '') + '\n'
         : null,
       'SERVICES (Total: $' + finalPrice + (tripCharge.apply ? ', incl. trip charge' : '') + ')',
       '  ' + svcLabel + (addons.length ? '  +  ' + addonsLine : ''),
@@ -2230,7 +2231,7 @@ app.get('/confirm/:token', async function(req, res) {
     await dbSet('agree_' + agreeToken, { ...booking, calId, confirmedAt: new Date().toISOString(), agreeToken });
   } catch(e) { console.error('Agreement token store error:', e.message); }
 
-  // SMS — buyer, buyer agent, seller agent.
+  // SMS — buyer, buyer agent, listing agent.
   // Gated on the operator's sms flag: inspectors with sms:false (e.g. Jeff)
   // run email-only, so none of these texts fire for their bookings.
   if (opCfg.sms) {
@@ -2238,19 +2239,19 @@ app.get('/confirm/:token', async function(req, res) {
     // Sends the hub URL — single link that opens the status page where the
     // client can sign the agreement, reschedule, or check report status.
     await sms(buyer.phone,
-      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + (baPhone ? '\n\nYour agent ' + (baName ? baName.split(\' \')[0] : 'your agent') + ' has also been notified.' : '') + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
 
     // SMS - buyer agent (only if phone provided)
     if (baPhone) {
       await sms(baPhone,
-        'Hi ' + (baName || 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with seller\'s agent:\n- Seller\'s agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+        'Hi ' + (baName ? baName.split(' ')[0] : 'there') + '! Inspection scheduled for your buyer.\n\nAddress: ' + address + '\nBuyer: ' + fullName + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\nConf #: ' + confId + '\n\nACTION NEEDED — Confirm with listing agent:\n- Listing agent aware of date & time\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
       );
     }
 
     if (sellerAgent && sellerAgent.phone) {
       await sms(sellerAgent.phone,
-        'Hello' + (sellerAgent.name ? ' ' + sellerAgent.name : '') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nIMPORTANT: Please send the CBS code so I can access the home, and reply to this message to confirm the inspection.\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+        'Hi ' + (sellerAgent.name ? sellerAgent.name.split(' ')[0] : 'there') + '! Inspection scheduled at your listing.\n\nAddress: ' + address + '\nDate: ' + dateFmt + ' @ ' + time + '\nService: ' + svcLabel + '\n\nPlease ensure by inspection day:\n- GAS on & accessible\n- WATER on & accessible\n- ELECTRICAL on & accessible\n- ATTIC ACCESS clear & accessible\n\nIMPORTANT: Please send the CBS code so I can access the home, and reply to this message to confirm the inspection.\n\nWARNING: If utilities are NOT on, a $125 re-inspection fee will apply.\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
       );
     }
   }
@@ -2282,7 +2283,7 @@ app.get('/confirm/:token', async function(req, res) {
   );
 
   try {
-    await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml, null, opCfg.replyTo);
+    await sendEmail(buyer.email, 'Inspection Confirmed — ' + dateFmt + ' @ ' + time + ' [' + confId + ']', buyerHtml, null, opCfg.replyTo, baEmail || null);
   } catch(e) { console.error('Buyer email:', e.message); }
 
   // Extra recipients email
@@ -2322,7 +2323,7 @@ app.get('/confirm/:token', async function(req, res) {
       + '<tr><td style="padding:6px 0;color:#888">Service</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(svcLabel) + (addons.length ? ' + ' + escapeHtml(addonsLine) : '') + '</td></tr>'
       + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
       + '</table>'
-      + '<p>Please confirm the seller\'s agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
+      + '<p>Please confirm the listing agent is aware of the inspection date and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong>.</p>'
       + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     try {
@@ -2332,7 +2333,31 @@ app.get('/confirm/:token', async function(req, res) {
 
   // Seller agent email
   if (sellerAgent && sellerAgent.email) {
-    const sellerHtml = emailWrap(
+    const isNewConstruction = inspType === 'new-construction';
+    const sellerRoleLabel = isNewConstruction ? 'Construction Representative' : 'Listing Agent';
+    const sellerHeading   = isNewConstruction ? 'Inspection Scheduled — New Construction' : 'Inspection Scheduled at Your Listing';
+    const sellerIntro     = isNewConstruction
+      ? 'A new construction inspection has been scheduled. Please ensure the following are ready by inspection day:'
+      : 'A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:';
+    const sellerHtml = isNewConstruction ? emailWrap(
+      '<h2 style="color:#0F1C35">New Construction Inspection Scheduled</h2>'
+      + '<p>Hi ' + escapeHtml(sellerAgent.name || 'there') + ',</p>'
+      + '<p>A new construction inspection has been scheduled at the following property. I need a few things from you before inspection day:</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(address) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+      + '</table>'
+      + '<p style="font-weight:600;color:#1B2D52;margin:20px 0 8px">Please reply with the following:</p>'
+      + '<ol style="margin:0 0 16px 20px;line-height:2">'
+      + '<li>Are <strong>gas, water, and electrical</strong> on and accessible at the time of inspection?</li>'
+      + '<li>Are there any areas or systems that are <strong>not yet complete or not accessible</strong> for inspection?</li>'
+      + '<li>How will I <strong>gain access</strong> to the home? (key, lockbox, someone on site, etc.)</li>'
+      + '<li>Is there anything you need from me prior to the inspection? (e.g. proof of insurance, BTR license number, or any other documentation)</li>'
+      + '<li>Is there any other information I should have before arriving?</li>'
+      + '</ol>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
+    ) : emailWrap(
       '<h2 style="color:#0F1C35">Inspection Scheduled at Your Listing</h2>'
       + '<p>Hi ' + escapeHtml(sellerAgent.name || 'there') + ',</p>'
       + '<p>A home inspection has been scheduled at your listing. Please ensure the following are ready by inspection day:</p>'
@@ -2348,8 +2373,8 @@ app.get('/confirm/:token', async function(req, res) {
       + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     try {
-      await sendEmail(sellerAgent.email, 'Inspection Scheduled — ' + address + ' on ' + dateFmt, sellerHtml, null, opCfg.replyTo);
-    } catch(e) { console.error('Seller agent email:', e.message); }
+      await sendEmail(sellerAgent.email, (isNewConstruction ? 'New Construction Inspection — ' : 'Inspection Scheduled — ') + address + ' on ' + dateFmt, sellerHtml, null, opCfg.replyTo);
+    } catch(e) { console.error('Listing agent email:', e.message); }
   }
 
   // Owner confirmation page
@@ -3892,7 +3917,7 @@ app.get('/admin/csv', adminActionLimiter, async function(req, res) {
     const result = (role === 'jaren')
       ? await pool.query('SELECT * FROM confirmed_bookings ORDER BY confirmed_at DESC')
       : await pool.query("SELECT * FROM confirmed_bookings WHERE operator = 'jeff' ORDER BY confirmed_at DESC");
-    const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Seller Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid','Agreement Signed','Date Signed'];
+    const headers = ['Conf #','Date Confirmed','Inspection Date','Time','Buyer','Buyer Phone','Buyer Email','Address','Service','Add-Ons','Buyer Agent','Agent Phone','Listing Agent','Sq Ft','Year Built','Base Price','Final Price','Discount Code','Discount Amt','Trip Charge','Notes','Paid','Date Paid','Agreement Signed','Date Signed'];
     const lines = [headers.join(',')];
     for (const row of result.rows) {
       const d = row.data;
@@ -4406,7 +4431,7 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
     </div>
 
     <div class="card">
-      <h3>Seller's Agent <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(optional)</span></h3>
+      <h3>Listing Agent <span style="font-weight:400;color:#8A9AB5;text-transform:none;letter-spacing:0">(optional)</span></h3>
       <div class="row">
         <div class="field">
           <label>Name</label>
@@ -4705,8 +4730,8 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
   if (!newBuyer.phone || !isValidPhone(newBuyer.phone)) return res.status(400).json({ error: 'Buyer phone is invalid.' });
   if (newBA.email && !isValidEmail(newBA.email)) return res.status(400).json({ error: "Buyer's agent email is invalid." });
   if (newBA.phone && !isValidPhone(newBA.phone)) return res.status(400).json({ error: "Buyer's agent phone is invalid." });
-  if (newSA.email && !isValidEmail(newSA.email)) return res.status(400).json({ error: "Seller's agent email is invalid." });
-  if (newSA.phone && !isValidPhone(newSA.phone)) return res.status(400).json({ error: "Seller's agent phone is invalid." });
+  if (newSA.email && !isValidEmail(newSA.email)) return res.status(400).json({ error: "Listing agent email is invalid." });
+  if (newSA.phone && !isValidPhone(newSA.phone)) return res.status(400).json({ error: "Listing agent phone is invalid." });
   if (ALL_SLOTS.indexOf(newTime) === -1)         return res.status(400).json({ error: 'Time slot is invalid.' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate))      return res.status(400).json({ error: 'Date must be YYYY-MM-DD.' });
   if (newSqft <= 0)                              return res.status(400).json({ error: 'Square footage is required.' });
@@ -4852,7 +4877,7 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
           : 'BUYER\u2019S AGENT\n  None provided',
         '',
         (newSA.name || newSA.email || newSA.phone)
-          ? 'SELLER\u2019S AGENT\n  ' + newSA.name + (newSA.brokerage ? '  \u2014  ' + newSA.brokerage : '') + (newSA.phone ? '  |  ' + newSA.phone : '') + '\n'
+          ? 'LISTING AGENT\n  ' + newSA.name + (newSA.brokerage ? '  \u2014  ' + newSA.brokerage : '') + (newSA.phone ? '  |  ' + newSA.phone : '') + '\n'
           : null,
         'SERVICES (Total: $' + finalPrice + (tripCharge.apply ? ', incl. trip charge' : '') + ')',
         '  ' + svcLabel + (newAddons.length ? '  +  ' + addonsLine : ''),
