@@ -410,7 +410,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
     <div class="why-grid">
       <div class="wc"><span class="wi">📄</span><h3>Same-Day Reports</h3><p>Full digital report with photos delivered the same day as your inspection.</p></div>
       <div class="wc"><span class="wi">🔍</span><h3>Nothing Overlooked</h3><p>Structure, roof, HVAC, electrical, plumbing, and more — all examined and documented.</p></div>
-      <div class="wc"><span class="wi">📱</span><h3>Text Confirmations</h3><p>Automated texts to buyer, buyer's agent, and seller's agent with date, time, and utility reminders.</p></div>
+      <div class="wc"><span class="wi">📱</span><h3>Text Confirmations</h3><p>Automated texts to buyer, buyer's agent, and listing agent with date, time, and utility reminders.</p></div>
       <div class="wc"><span class="wi">📞</span><h3>Always Reachable</h3><p>Have questions before or after your inspection? Call or text Jaren directly — no call centers, no runaround.</p></div>
       <div class="wc"><span class="wi">🤝</span><h3>We Work For You</h3><p>Our only job is giving you the full, honest truth about the home. No conflicts of interest — ever.</p></div>
       <div class="wc"><span class="wi">📅</span><h3>Easy Online Booking</h3><p>Step-by-step booking with live calendar availability. No phone tag needed.</p></div>
@@ -747,7 +747,7 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           </div>
 
           <div class="csec">
-            <div class="csec-hd"><span class="badge badge-gray">Seller's Agent</span><h4>Seller's Agent <span style="font-size:.78rem;font-weight:400;color:var(--warm-gray)">(optional)</span></h4></div>
+            <div class="csec-hd"><span class="badge badge-gray">Listing Agent</span><h4>Listing Agent <span style="font-size:.78rem;font-weight:400;color:var(--warm-gray)">(optional)</span></h4></div>
             <div class="fr2">
               <div class="fg"><label>Agent Name</label><input type="text" id="saName" placeholder="Sarah Listing"/></div>
               <div class="fg"><label>Brokerage</label><input type="text" id="saBrok" placeholder="Coldwell Banker"/></div>
@@ -775,8 +775,8 @@ footer{background:var(--navy-dark);border-top:3px solid var(--gold);padding:54px
           <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);border-radius:8px;padding:14px;margin-bottom:16px;font-size:.83rem;color:var(--warm-gray);line-height:1.75">
             <strong style="color:var(--navy-dark)">📱 Text messages will be sent to:</strong><br>
             • <strong>Buyer</strong> — appointment confirmation with date, time &amp; property address<br>
-            • <strong>Buyer's Agent</strong> (if provided) — confirmation + reminder to confirm seller's agent is aware of the inspection date, and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong><br>
-            • <strong>Seller's Agent</strong> (if provided) — notification of scheduled inspection, utility/access requirements, and notice that <strong>failure to have utilities on will result in a $125 re-inspection fee</strong><br><br>
+            • <strong>Buyer's Agent</strong> (if provided) — confirmation + reminder to confirm listing agent is aware of the inspection date, and that <strong>gas, water, electrical, and attic access are on &amp; accessible</strong><br>
+            • <strong>Listing Agent</strong> (if provided) — notification of scheduled inspection, utility/access requirements, and notice that <strong>failure to have utilities on will result in a $125 re-inspection fee</strong><br><br>
             📞 Questions or need to reschedule? Contact <strong>San Tan Property Inspections</strong> at <strong>(480) 618-0805</strong> or <strong>santanpropertyinspections@gmail.com</strong>
           </div>
           <div style="background:rgba(201,168,76,.06);border:1.5px solid rgba(201,168,76,.3);border-radius:8px;padding:14px;margin-bottom:16px;"><label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;"><input type="checkbox" id="smsConsent" style="width:16px;height:16px;accent-color:var(--gold);flex-shrink:0;margin-top:3px;"><span style="font-size:.8rem;color:var(--text);line-height:1.6;"><strong>Texts preferred — you can reply directly.</strong> Check this box to receive SMS appointment confirmations and inspection-related notifications. If unchecked, you'll only get email confirmations. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe. View our <a href="#privacy-policy" style="color:var(--gold);">Privacy Policy</a>.</span></label></div>
@@ -1115,7 +1115,7 @@ function buildSum(){
   const b=BD,d=b.date;
   const ds=d?DAYS[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear():'—';
   const addonNames=b.addons.map(a=>a.name);if(b.heatSurcharge)addonNames.push('☀️ Afternoon Surcharge (+$50)');const addonsStr=addonNames.length?addonNames.join(', '):'None';
-  const saLine=b.sa&&b.sa.name?`<div class="sr"><div class="sk">Seller's Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
+  const saLine=b.sa&&b.sa.name?`<div class="sr"><div class="sk">Listing Agent</div><div class="sv">${b.sa.name}${b.sa.phone?' · '+b.sa.phone:''}</div></div>`:'';
   const baLine=b.ba&&b.ba.name?`<div class="sr"><div class="sk">Buyer's Agent</div><div class="sv">${esc(b.ba.name)}${b.ba.phone?' · '+esc(b.ba.phone):''}</div></div>`:'';
   let yearNote='';
   if(b.yr<=1959)yearNote=' <small style="color:var(--gold)">(+$80 age surcharge)</small>';
