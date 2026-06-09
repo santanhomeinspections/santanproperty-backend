@@ -763,27 +763,33 @@ ${cfg.phone} | santanpropertyinspections@gmail.com | santanpropertyinspections.c
 HOME INSPECTION AGREEMENT
 
 1. SCOPE OF INSPECTION
-The Inspector will perform a non-invasive visual inspection of the accessible systems and components of the property in accordance with the Standards of Professional Practice for Arizona Home Inspectors as adopted by the Arizona State Board of Technical Registration (available at btr.az.gov). The inspection will produce a written report identifying material defects observed at the time of inspection. The report will be delivered the same day as the inspection.
+The Inspector will perform a non-invasive visual inspection of the accessible systems and components of the property in accordance with the Standards of Professional Practice for Arizona Home Inspectors as adopted by the Arizona State Board of Technical Registration (available at btr.az.gov) and the InterNACHI Standards of Practice for Performing a General Home Inspection (available at internachi.org). The inspection will produce a written report identifying material defects observed at the time of inspection. The report will be delivered the same day as the inspection.
 
 The standard inspection covers the following systems and components:
 
-ROOF: Roof covering materials (shingles, tile, foam, membrane); flashings; roof drainage (gutters, downspouts, and extensions); skylights, chimneys, and roof penetrations; condition of visible roof structure from accessible areas.
+ROOF: Roof covering materials and condition (shingles, tile, foam, membrane); flashings at penetrations, valleys, and wall intersections; roof drainage including gutters, downspouts, and extensions; skylights, chimneys, and roof penetrations; visible roof structure from accessible areas; evidence of active leaking or prior water intrusion.
 
-EXTERIOR: Wall cladding, trim, and fascia; eaves, soffits, and exterior doors; windows and window operation from exterior; walkways, driveways, patios, and steps; grading and surface drainage at the foundation perimeter; fences and retaining walls where they affect the structure.
+EXTERIOR: Wall cladding, veneer, trim, and fascia; eaves, soffits, and exterior doors including operation and weatherstripping; windows from exterior including condition of glazing and frames; walkways, driveways, patios, decks, and steps; grading and surface drainage at the foundation perimeter; vegetation and soil conditions where they affect the structure; retaining walls and fences where they affect the structure or safety.
 
-ELECTRICAL SYSTEM: Service entrance conductors and service equipment; main and sub-panel(s) including breakers and fuses; grounding and bonding; visible branch circuit wiring; outlets, switches, and fixtures (tested via spot checks); GFCI and AFCI protection where required; smoke and carbon monoxide detectors (presence observed, not tested).
+ELECTRICAL SYSTEM: Service entrance conductors and service equipment; main and sub-panel(s) including breaker and fuse condition, labeling, and overcurrent protection; grounding and bonding; visible branch circuit wiring type and condition; representative sample of outlets, switches, and fixtures tested for operation; GFCI protection at required locations including bathrooms, kitchen, garage, exterior, and basement; AFCI protection where required; smoke and carbon monoxide detectors (presence observed, not tested for functionality).
 
-PLUMBING SYSTEM: Main water supply, shut-off, and water meter location; interior water supply lines and visible distribution; drain, waste, and vent pipes; water heater(s) including capacity, condition, safety devices, and approximate age; sump pumps if present; functional flow and drainage at fixtures.
+PLUMBING SYSTEM: Main water supply line, shut-off location, and pressure; interior supply distribution pipes and visible supports; drain, waste, and vent pipes; water heater(s) including type, capacity, condition, approximate age, safety devices (TPR valve and expansion tank), and venting; fixtures including sinks, tubs, showers, and toilets; functional flow at fixtures; functional drainage; fuel storage and distribution systems where present.
 
-BASEMENT, FOUNDATION, AND STRUCTURE: Foundation type and visible condition; evidence of moisture intrusion, efflorescence, or staining; basement or crawl space access and conditions; visible structural framing including floor joists, beams, and columns where accessible; evidence of settlement, movement, or significant cracking.
+BASEMENT, FOUNDATION, CRAWLSPACE, AND STRUCTURE: Foundation type and visible condition; floor, wall, and ceiling structure; visible framing members including beams, joists, columns, and posts; evidence of moisture intrusion, efflorescence, staining, or prior water damage; sump pumps and related equipment where present; evidence of settlement, movement, or significant cracking.
 
-GARAGE: Garage door(s), openers, and auto-reverse safety function; firewall and fire-rated door between garage and living space; vehicle door operation and weatherstripping; electrical and lighting within the garage.
+ROOF STRUCTURE AND ATTIC: Visible framing including rafters, trusses, collar ties, and ridge board; attic ventilation including ridge, soffit, gable, and power vents; insulation type, depth, and approximate coverage; vapor barriers where visible; attic access condition and clearances.
 
-HEATING AND COOLING: Heating equipment type, energy source, and approximate age; cooling (air conditioning) equipment type and approximate age; visible distribution systems (ductwork, registers); normal operating controls; flue pipes, chimneys, and venting for combustion appliances; filter condition observed.
+GARAGE: Garage door(s), openers, and auto-reverse safety function; photo eye sensor placement and operation; firewall and fire-rated door between garage and living space; vehicle door operation and weatherstripping; electrical and GFCI protection within the garage.
 
-DOORS, WINDOWS, AND INTERIOR: Interior doors and hardware; windows including sash operation, locking hardware, and glazing condition (visible fogging/seal failure noted); floors, walls, and ceilings for evidence of moisture, staining, or significant defects; stairways, railings, and guardrails; representative sample of accessible interior components.
+HEATING: Heating equipment type, energy source, approximate age, and visible condition; distribution system including ducts and registers; normal operating controls and thermostat response; flue pipes, chimneys, and combustion air supply; filter condition observed.
 
-INSULATION AND VENTILATION: Insulation type and approximate depth in accessible attic areas; vapor barriers where visible; attic ventilation (ridge, soffit, gable, or power vents); bathroom, kitchen, and laundry exhaust fan venting to the exterior where accessible; crawl space ventilation where applicable.
+COOLING: Cooling equipment type, approximate age, and visible condition; distribution system including ducts, registers, and air handler; normal operating controls and thermostat response; condensate drainage; refrigerant lines where visible.
+
+DOORS, WINDOWS, AND INTERIOR: Interior doors including operation, hardware, and condition; windows including sash operation, locking hardware, and glazing condition (seal failure and fogging noted); floors, walls, and ceilings for evidence of moisture, staining, cracking, or significant defects; stairways including treads, risers, and handrails; guardrails at elevated areas; counters and cabinets for visible condition and operation.
+
+INSULATION AND VENTILATION: Insulation type and approximate depth in accessible attic and crawlspace areas; vapor barriers where visible; attic ventilation adequacy; bathroom, kitchen, and laundry exhaust fan venting where accessible; crawlspace ventilation and moisture conditions.
+
+FIREPLACE AND FUEL-BURNING APPLIANCES (where present): Fireplace type (masonry, prefab, gas insert); visible condition of firebox, damper operation, lintel, and hearth; gas supply shutoff where visible; combustion air supply; visible flue condition from below. Note: a full chimney inspection is a separate add-on service.
 
 BUILT-IN KITCHEN APPLIANCES: Dishwasher (operated through a cycle); range/cooktop and oven (operated and tested for heating); built-in microwave (operated); garbage disposal (operated); exhaust fan/range hood (operated); refrigerator is not included unless specifically agreed to in writing.
 
@@ -806,7 +812,7 @@ The inspection fee is due and payable on the day of inspection. Accepted forms o
 A $125.00 re-inspection fee applies if utilities are not on and accessible at the time of the scheduled inspection. Please provide at least 24 hours notice for cancellations or rescheduling.
 
 6. LIMITATION OF LIABILITY
-The Inspector assumes no liability for the cost of repair or replacement of unreported defects. The Inspector's total liability is limited to a refund of the inspection fee paid. Client waives any claim for consequential, exemplary, special, or incidental damages or for loss of use of the property.
+The Inspector's total liability arising from this inspection, regardless of the nature of the claim, shall not exceed the fee paid for the inspection. Client's sole and exclusive remedy against the Inspector is a refund of the inspection fee paid. Client expressly waives any right to seek damages in excess of the inspection fee paid, including any consequential, exemplary, special, incidental, or punitive damages, or damages for loss of use of the property. Client agrees to immediately accept a refund of the inspection fee as full and final settlement of any and all claims arising from this inspection.
 
 7. CLAIMS PROCEDURE
 Client must: (1) provide written notification within 10 days of discovery; and (2) provide the Inspector with access for re-inspection before any repairs are made, except in cases of emergency where Client shall notify the Inspector in writing within 24 hours of such emergency repair. No legal action may be filed more than one (1) year after the date of inspection.
