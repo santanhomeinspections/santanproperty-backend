@@ -3287,7 +3287,7 @@ async function load() {
           }
         }
         return '<tr>' +
-          '<td><div class="conf">'+(bd.agreementToken?'<a href="/i/'+encodeURIComponent(bd.agreementToken)+'?s='+encodeURIComponent(signToken(bd.agreementToken))+'" target="_blank" style="color:#C9A84C;text-decoration:none;font-weight:700;">'+esc(bd.confId)+'</a>':esc(bd.confId))+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
+          '<td><div class="conf">'+(b.hubUrl?'<a href="'+b.hubUrl+'" target="_blank" style="color:#C9A84C;text-decoration:none;font-weight:700;">'+esc(bd.confId)+'</a>':esc(bd.confId))+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
           '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
@@ -4081,9 +4081,14 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
     ]);
     const m = mileageAgg.rows[0] || {};
     const jeffCount = (jeffTally.rows[0] && jeffTally.rows[0].cnt) || 0;
+    // Pre-build hub URLs server-side so client JS doesn't need signToken
+    const bookingsWithHub = bookings.rows.map(function(b) {
+      const token = b.data && b.data.agreementToken;
+      return Object.assign({}, b, { hubUrl: token ? '/i/' + encodeURIComponent(token) + '?s=' + encodeURIComponent(signToken(token)) : null });
+    });
     res.json({
       role: role,
-      bookings: bookings.rows,
+      bookings: bookingsWithHub,
       reschedules: reschedules.rows,
       codes: codes.rows,
       pending: pending.rows,
