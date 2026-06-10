@@ -2247,7 +2247,7 @@ app.get('/confirm/:token', async function(req, res) {
     // Sends the hub URL — single link that opens the status page where the
     // client can sign the agreement, reschedule, or check report status.
     await sms(buyer.phone,
-      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + (baPhone ? '\n\nYour agent ' + (baName ? baName.split(' ')[0] : 'your agent') + ' has also been notified.' : '') + '\n\nOpen your inspection hub (sign agreement, reschedule, report status):\n' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
+      'Hi ' + buyer.firstName + '! Your inspection is confirmed.\n\nAddress: ' + address + '\nDate: ' + dateFmt + '\nTime: ' + time + (endTime ? ' to ' + endTime : '') + '\nService: ' + svcLabel + (addons.length ? '\nAdd-ons: ' + addonsLine : '') + '\nEst. Total: $' + finalPrice + ' (pay day-of)' + (tripCharge.apply ? ' incl. $' + TRIP_CHARGE_AMT + ' trip charge' : '') + '\nConf #: ' + confId + (baPhone ? '\n\nYour agent ' + (baName ? baName.split(' ')[0] : 'your agent') + ' has also been notified.' : '') + '\n\nInspection Hub: ' + hubUrl + '\n\nQuestions? ' + opCfg.phone + ' | santanpropertyinspections@gmail.com\n— San Tan Property Inspections'
     );
 
     // SMS - buyer agent (only if phone provided)
@@ -2283,7 +2283,7 @@ app.get('/confirm/:token', async function(req, res) {
     + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:18px 20px;margin:24px 0;border-radius:0 8px 8px 0">'
     + '<p style="margin:0 0 6px;font-size:.95rem;font-weight:700;color:#1B2D52">Your Inspection Hub</p>'
     + '<p style="margin:0 0 14px;font-size:.86rem;color:#555;line-height:1.6">Open the link below to sign your agreement, request a reschedule, or check the status of your report. Bookmark it — this is your one-stop page for everything.</p>'
-    + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:13px 26px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.9rem">Open Inspection Hub</a>'
+    + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:13px 26px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.9rem">View Your Inspection Hub →</a>'
     + '<p style="margin:14px 0 0;font-size:.78rem;color:#888;line-height:1.5"><strong style="color:#7a4a00">Action needed:</strong> your inspection agreement must be signed before the report can be released. The hub above will walk you through it.</p>'
     + '</div>'
     + '<p>Your report will be delivered the <strong>same day</strong> as your inspection.</p>'
@@ -3287,7 +3287,7 @@ async function load() {
           }
         }
         return '<tr>' +
-          '<td><div class="conf">'+esc(bd.confId)+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
+          '<td><div class="conf">'+(bd.agreementToken?'<a href="/i/'+encodeURIComponent(bd.agreementToken)+'?s='+encodeURIComponent(signToken(bd.agreementToken))+'" target="_blank" style="color:#C9A84C;text-decoration:none;font-weight:700;">'+esc(bd.confId)+'</a>':esc(bd.confId))+'</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">'+dt+'</div></td>' +
           '<td><div class="name">'+esc(bd.fullName||'')+'</div><div class="addr">'+esc(bd.address||'')+'</div></td>' +
           '<td><div class="svc">'+esc(bd.svcLabel||'')+'</div><div class="svc" style="margin-top:2px">'+esc(addons)+'</div></td>' +
           '<td><div class="agent">'+esc(bd.buyerAgent&&bd.buyerAgent.name?bd.buyerAgent.name:'—')+'</div><div class="svc">'+esc(bd.buyerAgent&&bd.buyerAgent.brokerage?bd.buyerAgent.brokerage:'')+'</div></td>' +
@@ -4642,7 +4642,7 @@ app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async fun
       + '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
       + '<p style="margin:0 0 10px;font-size:.9rem;color:#1B2D52"><strong>Your Inspection Hub</strong></p>'
       + '<p style="margin:0 0 12px;font-size:.84rem;color:#555">' + escapeHtml(ctaCopy) + '</p>'
-      + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
+      + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">View Your Inspection Hub →</a>'
       + '</div>'
       + '<p>Questions? Call or text <strong>' + opCfg.phone + '</strong></p>'
     );
@@ -4951,7 +4951,7 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
         + (hubUrl
             ? '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:14px 18px;margin:20px 0;border-radius:0 8px 8px 0">'
               + '<p style="margin:0 0 10px;font-size:.88rem;color:#1B2D52"><strong>Your Inspection Hub</strong> has the latest details:</p>'
-              + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Open Inspection Hub</a>'
+              + '<a href="' + hubUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">View Your Inspection Hub →</a>'
               + '</div>'
             : '')
         + '<p>If anything looks wrong or you have questions, please call or text <strong>' + opCfg.phone + '</strong>.</p>'
