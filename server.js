@@ -3554,8 +3554,8 @@ function showPendingDetail(idx) {
     + row_('Date', esc(d.dateFmt || '—'))
     + row_('Time', esc(d.time || '—'))
     + row_('Price', '$' + esc(String(d.finalPrice || '—')))
-    + (agent.name ? row_('Buyer Agent', esc(agent.name) + (agent.brokerage ? ' · ' + esc(agent.brokerage) : '') + (agent.phone ? ' · <a href="tel:' + esc(agent.phone) + '" style="color:#C9A84C;">' + esc(agent.phone) + '</a>' : '')) : '')
-    + (d.listingAgent && d.listingAgent.name ? row_('Listing Agent', esc(d.listingAgent.name) + (d.listingAgent.phone ? ' · ' + esc(d.listingAgent.phone) : '')) : '')
+    + (agent.name ? row_('Buyer Agent', esc(agent.name) + (agent.brokerage ? ' - ' + esc(agent.brokerage) : '') + (agent.phone ? ' - <a href="tel:' + esc(agent.phone) + '" style="color:#C9A84C;">' + esc(agent.phone) + '</a>' : '')) : '')
+    + (d.listingAgent && d.listingAgent.name ? row_('Listing Agent', esc(d.listingAgent.name) + (d.listingAgent.phone ? ' - ' + esc(d.listingAgent.phone) : '')) : '')
     + (d.notes ? row_('Notes', esc(d.notes)) : '')
     + '</table>'
     + '<div style="margin-top:24px;display:flex;gap:10px;">'
