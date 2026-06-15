@@ -2398,7 +2398,7 @@ app.get('/confirm/:token', async function(req, res) {
 <title>Booking Confirmed — San Tan Property Inspections</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;position:relative;overflow:hidden;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px;position:relative;overflow-y:auto;}
 body::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23C9A84C' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");pointer-events:none;}
 .card{background:#fff;border-radius:16px;padding:40px 36px;max-width:520px;width:100%;position:relative;z-index:1;box-shadow:0 28px 70px rgba(0,0,0,.4);}
 .logo{text-align:center;background:#0F1C35;border-radius:10px;padding:16px;margin-bottom:28px;}
@@ -3147,6 +3147,9 @@ tr:hover td{background:rgba(201,168,76,.04);}
       <div style="display:flex;gap:8px;align-items:center"><span id="pendingCount">—</span><button onclick="clearAllPending()" style="background:#C0392B;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:.7rem;cursor:pointer">Clear All</button></div>
     </div>
     <div id="pendingTable"><div class="empty">Loading...</div></div>
+    <div id="pendingDrawerOv" style="display:none;position:fixed;inset:0;background:rgba(5,10,20,0.85);z-index:500;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closePendingDetail()">
+      <div id="pendingDrawer" style="background:#1B2D52;border-radius:10px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5);"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -3508,21 +3511,63 @@ function renderPending(rows) {
   const el = document.getElementById('pendingTable');
   document.getElementById('pendingCount').textContent = rows.length + ' pending';
   if (!rows.length) { el.innerHTML = '<div class="empty">No pending bookings.</div>'; return; }
-  // Build a simple table — pending bookings don't need all the columns confirmed ones do
   const rowsHtml = rows.map(function(r) {
     const d = r.data || {};
     const created = new Date(r.created_at);
     const ageMins = Math.floor((Date.now() - created.getTime()) / 60000);
     const ageStr = ageMins < 60 ? ageMins + 'm ago' : ageMins < 1440 ? Math.floor(ageMins/60) + 'h ago' : Math.floor(ageMins/1440) + 'd ago';
     return '<tr>' +
-      '<td><div class="conf">' + esc(d.confId || '—') + '</div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
+      '<td><div class="conf"><a href="#" style="color:#C9A84C;text-decoration:none;font-weight:700;" onclick="showPendingDetail(' + JSON.stringify(r).replace(/"/g,'&quot;') + ');return false;">' + esc(d.confId || '—') + '</a></div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
       '<td><div class="name">' + esc(d.fullName || '') + '</div><div class="addr">' + esc(d.address || '') + '</div></td>' +
       '<td><div class="svc">' + esc(d.svcLabel || '') + '</div></td>' +
       '<td><div style="font-size:.85rem;color:#E8DEC4">' + esc(d.dateFmt || '') + '</div><div style="font-size:.72rem;color:#4A5A7A">@ ' + esc(d.time || '') + '</div></td>' +
-      '<td><div class="price">$' + (d.finalPrice || '—') + '</div><button data-action="delete-pending" data-token="' + esc(r.token) + '" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px">Delete</button></td>' +
+      '<td><div class="price">$' + (d.finalPrice || '—') + '</div>'
+        + '<button data-action="delete-pending" data-token="' + esc(r.token) + '" style="background:none;color:#C0392B;border:1px solid #C0392B;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:.72rem;margin-top:4px;display:block;">Delete</button>'
+        + '</td>' +
       '</tr>';
   }).join('');
   el.innerHTML = '<table><thead><tr><th>Conf #</th><th>Customer / Address</th><th>Service</th><th>Date / Time</th><th>Price</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+}
+
+// Pending booking detail drawer
+function showPendingDetail(row) {
+  const d = row.data || {};
+  const buyer = d.buyer || {};
+  const agent = d.buyerAgent || {};
+  const addons = d.addons && d.addons.length ? d.addons.join(', ') : '—';
+  const html = '<div style="padding:24px;max-width:520px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
+    + '<div style="font-size:1.1rem;font-weight:700;color:#C9A84C;">' + esc(d.confId || '') + '</div>'
+    + '<button onclick="closePendingDetail()" style="background:none;border:none;color:#8A9AB5;font-size:1.4rem;cursor:pointer;">✕</button>'
+    + '</div>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:.88rem;">'
+    + row_('Client', esc(buyer.firstName || '') + ' ' + esc(buyer.lastName || ''))
+    + row_('Phone', buyer.phone ? '<a href="tel:' + esc(buyer.phone) + '" style="color:#C9A84C;">' + esc(buyer.phone) + '</a>' : '—')
+    + row_('Email', buyer.email ? '<a href="mailto:' + esc(buyer.email) + '" style="color:#C9A84C;">' + esc(buyer.email) + '</a>' : '—')
+    + row_('Address', esc(d.address || '—'))
+    + row_('Sq Ft', esc(String(d.sqft || '—')))
+    + row_('Service', esc(d.svcLabel || '—'))
+    + row_('Add-ons', esc(addons))
+    + row_('Date', esc(d.dateFmt || '—'))
+    + row_('Time', esc(d.time || '—'))
+    + row_('Price', '$' + esc(String(d.finalPrice || '—')))
+    + (agent.name ? row_('Buyer Agent', esc(agent.name) + (agent.brokerage ? ' · ' + esc(agent.brokerage) : '') + (agent.phone ? ' · <a href="tel:' + esc(agent.phone) + '" style="color:#C9A84C;">' + esc(agent.phone) + '</a>' : '')) : '')
+    + (d.listingAgent && d.listingAgent.name ? row_('Listing Agent', esc(d.listingAgent.name) + (d.listingAgent.phone ? ' · ' + esc(d.listingAgent.phone) : '')) : '')
+    + (d.notes ? row_('Notes', esc(d.notes)) : '')
+    + '</table>'
+    + '<div style="margin-top:24px;display:flex;gap:10px;">'
+    + '<a href="/confirm/' + esc(row.token) + '" target="_blank" style="flex:1;display:block;text-align:center;background:#1B2D52;color:#C9A84C;border:1px solid #C9A84C;border-radius:6px;padding:10px;font-weight:700;font-size:.9rem;text-decoration:none;">✓ Confirm Booking</a>'
+    + '<button onclick="deletePending(\'' + esc(row.token) + '\');closePendingDetail();" style="flex:1;background:none;color:#C0392B;border:1px solid #C0392B;border-radius:6px;padding:10px;font-weight:700;font-size:.9rem;cursor:pointer;">✕ Delete</button>'
+    + '</div>'
+    + '</div>';
+  document.getElementById('pendingDrawer').innerHTML = html;
+  document.getElementById('pendingDrawerOv').style.display = 'flex';
+}
+function row_(label, val) {
+  return '<tr><td style="padding:7px 12px 7px 0;color:#8A9AB5;white-space:nowrap;vertical-align:top;">' + label + '</td><td style="padding:7px 0;color:#E8DEC4;">' + val + '</td></tr>';
+}
+function closePendingDetail() {
+  document.getElementById('pendingDrawerOv').style.display = 'none';
 }
 
 async function deletePending(token) {
@@ -4502,7 +4547,7 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       ${escapeHtml(((d.buyer && d.buyer.email) || 'No email on file'))} ·
       ${escapeHtml(((d.buyer && d.buyer.phone) || 'No phone on file'))}
     </p>
-    <button type="button" id="resendHubBtn" class="btn-secondary" style="background:#243660;color:#C9A84C;border:1px solid #C9A84C;">
+    <button type="button" id="resendHubBtn" style="background:#C9A84C;color:#1B2D52;border:none;border-radius:6px;padding:10px 20px;font-weight:700;font-size:.9rem;cursor:pointer;width:100%;">
       ✉ Resend Hub Link to Client
     </button>
     <div id="resendFlash" style="margin-top:12px;"></div>
