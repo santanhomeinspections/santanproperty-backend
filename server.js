@@ -3560,7 +3560,7 @@ function showPendingDetail(idx) {
     + '</table>'
     + '<div style="margin-top:24px;display:flex;gap:10px;">'
     + '<a href="/confirm/' + esc(row.token) + '" target="_blank" style="flex:1;display:block;text-align:center;background:#1B2D52;color:#C9A84C;border:1px solid #C9A84C;border-radius:6px;padding:10px;font-weight:700;font-size:.9rem;text-decoration:none;">Confirm Booking</a>'
-    + '<button onclick="deletePending(\'' + esc(row.token) + '\');closePendingDetail();" style="flex:1;background:none;color:#C0392B;border:1px solid #C0392B;border-radius:6px;padding:10px;font-weight:700;font-size:.9rem;cursor:pointer;">Delete</button>'
+    + '<button data-action="delete-pending-drawer" data-token="' + esc(row.token) + '" style="flex:1;background:none;color:#C0392B;border:1px solid #C0392B;border-radius:6px;padding:10px;font-weight:700;font-size:.9rem;cursor:pointer;">Delete</button>'
     + '</div>'
     + '</div>';
   document.getElementById('pendingDrawer').innerHTML = html;
@@ -3615,6 +3615,7 @@ document.addEventListener('click', function(e) {
   if (action === 'hard-delete') hardDelete(id);
   if (action === 'deletecode') deleteCode(code);
   if (action === 'delete-pending') deletePending(token);
+  if (action === 'delete-pending-drawer') { closePendingDetail(); deletePending(token); }
   if (action === 'countersign') counterSign(id, btn);
 });
 
