@@ -3507,17 +3507,19 @@ function renderHealth(bookings, reschedules) {
   el.innerHTML = html;
 }
 
+var _pendingRows = [];
 function renderPending(rows) {
+  _pendingRows = rows;
   const el = document.getElementById('pendingTable');
   document.getElementById('pendingCount').textContent = rows.length + ' pending';
   if (!rows.length) { el.innerHTML = '<div class="empty">No pending bookings.</div>'; return; }
-  const rowsHtml = rows.map(function(r) {
+  const rowsHtml = rows.map(function(r, idx) {
     const d = r.data || {};
     const created = new Date(r.created_at);
     const ageMins = Math.floor((Date.now() - created.getTime()) / 60000);
     const ageStr = ageMins < 60 ? ageMins + 'm ago' : ageMins < 1440 ? Math.floor(ageMins/60) + 'h ago' : Math.floor(ageMins/1440) + 'd ago';
     return '<tr>' +
-      '<td><div class="conf"><a href="#" style="color:#C9A84C;text-decoration:none;font-weight:700;" onclick="showPendingDetail(' + JSON.stringify(r).replace(/"/g,'&quot;') + ');return false;">' + esc(d.confId || '—') + '</a></div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
+      '<td><div class="conf"><a href="#" style="color:#C9A84C;text-decoration:none;font-weight:700;" onclick="showPendingDetail(' + idx + ');return false;">' + esc(d.confId || '—') + '</a></div><div style="font-size:.72rem;color:#4A5A7A;margin-top:2px">' + ageStr + '</div></td>' +
       '<td><div class="name">' + esc(d.fullName || '') + '</div><div class="addr">' + esc(d.address || '') + '</div></td>' +
       '<td><div class="svc">' + esc(d.svcLabel || '') + '</div></td>' +
       '<td><div style="font-size:.85rem;color:#E8DEC4">' + esc(d.dateFmt || '') + '</div><div style="font-size:.72rem;color:#4A5A7A">@ ' + esc(d.time || '') + '</div></td>' +
@@ -3530,7 +3532,8 @@ function renderPending(rows) {
 }
 
 // Pending booking detail drawer
-function showPendingDetail(row) {
+function showPendingDetail(idx) {
+  const row = _pendingRows[idx] || {};
   const d = row.data || {};
   const buyer = d.buyer || {};
   const agent = d.buyerAgent || {};
