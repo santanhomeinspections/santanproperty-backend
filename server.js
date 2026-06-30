@@ -3150,6 +3150,26 @@ tr:hover td{background:rgba(201,168,76,.04);}
     <div id="pendingDrawerOv" style="display:none;position:fixed;inset:0;background:rgba(5,10,20,0.85);z-index:500;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closePendingDetail()">
       <div id="pendingDrawer" style="background:#1B2D52;border-radius:10px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5);"></div>
     </div>
+    <!-- Receipt confirmation modal -->
+    <div id="receiptModalOv" style="display:none;position:fixed;inset:0;background:rgba(5,10,20,0.85);z-index:600;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#1B2D52;border-radius:10px;width:100%;max-width:400px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="font-size:1.1rem;font-weight:700;color:#C9A84C;margin-bottom:6px;">Mark as Paid</div>
+        <div style="font-size:.85rem;color:#8A9AB5;margin-bottom:20px;">Confirm the amount collected and send a receipt to the client.</div>
+        <div id="receiptClientInfo" style="font-size:.9rem;color:#E8DEC4;margin-bottom:16px;"></div>
+        <label style="display:block;font-size:.75rem;color:#8A9AB5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Amount Collected ($)</label>
+        <input id="receiptAmount" type="number" step="0.01" min="0" style="width:100%;background:#0F1C35;border:1px solid #344870;border-radius:6px;padding:10px 12px;color:#E8DEC4;font-size:1rem;margin-bottom:16px;outline:none;">
+        <label style="display:block;font-size:.75rem;color:#8A9AB5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Payment Method</label>
+        <div id="receiptMethod" style="font-size:.9rem;color:#E8DEC4;margin-bottom:20px;text-transform:capitalize;"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:#E8DEC4;margin-bottom:20px;cursor:pointer;">
+          <input type="checkbox" id="receiptSendEmail" checked style="width:16px;height:16px;">
+          Send receipt email to client
+        </label>
+        <div style="display:flex;gap:10px;">
+          <button onclick="closeReceiptModal()" style="flex:1;padding:11px;background:transparent;border:1px solid #344870;border-radius:6px;color:#8A9AB5;font-size:.9rem;cursor:pointer;">Cancel</button>
+          <button onclick="confirmMarkPaid()" style="flex:2;padding:11px;background:#C9A84C;border:none;border-radius:6px;color:#1B2D52;font-size:.9rem;font-weight:700;cursor:pointer;">Confirm & Send Receipt</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -3228,6 +3248,7 @@ async function load() {
     renderCodes(d.codes || []);
     renderPending(d.pending || []);
     renderHealth(d.bookings || [], d.reschedules || []);
+    window._lastBookings = d.bookings || [];
 
     document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
     if (!d.bookings.length) {
@@ -3589,9 +3610,48 @@ async function clearAllPending() {
   else { alert('Error: ' + (data.error || 'Unknown')); }
 }
 
+// Receipt modal state
+var _receiptConfId = null, _receiptMethod = null;
+
 async function setPayment(confId, method) {
-  // method: '' = unpaid, 'cash'|'card'|'venmo'|'zelle' = paid w/ method, '__unpaid' = unpaid
-  const r = await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json'/* basic auth auto-sent by browser */}, body: JSON.stringify({confId, method}) });
+  if (!method) {
+    // Marking unpaid — no modal needed
+    await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confId, method}) });
+    load();
+    return;
+  }
+  // Show receipt modal before marking paid
+  _receiptConfId = confId;
+  _receiptMethod = method;
+  // Find booking data to pre-fill amount
+  const booking = (window._lastBookings||[]).find(function(b){ return (b.data||{}).confId === confId; });
+  const d = booking ? (booking.data||{}) : {};
+  document.getElementById('receiptAmount').value = d.finalPrice || '';
+  document.getElementById('receiptMethod').textContent = method.charAt(0).toUpperCase() + method.slice(1);
+  document.getElementById('receiptClientInfo').innerHTML = '<strong>' + esc(d.fullName||'Client') + '</strong><br>' + esc(d.address||'') + '<br><span style="color:#8A9AB5;">' + esc((d.buyer&&d.buyer.email)||'') + '</span>';
+  document.getElementById('receiptModalOv').style.display = 'flex';
+}
+
+function closeReceiptModal() {
+  document.getElementById('receiptModalOv').style.display = 'none';
+  _receiptConfId = null; _receiptMethod = null;
+  load(); // refresh to reset dropdown
+}
+
+async function confirmMarkPaid() {
+  const amount = parseFloat(document.getElementById('receiptAmount').value);
+  if (!amount || amount <= 0) { alert('Enter a valid amount.'); return; }
+  const sendEmail = document.getElementById('receiptSendEmail').checked;
+  document.getElementById('receiptModalOv').style.display = 'none';
+  // Mark paid
+  await fetch('/admin/set-payment', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confId: _receiptConfId, method: _receiptMethod}) });
+  // Send receipt if requested
+  if (sendEmail) {
+    const r = await fetch('/admin/send-receipt', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confId: _receiptConfId, amount, method: _receiptMethod}) });
+    const data = await r.json();
+    if (!data.success) alert('Receipt send failed: ' + (data.error||'Unknown error'));
+  }
+  _receiptConfId = null; _receiptMethod = null;
   load();
 }
 
@@ -3753,6 +3813,65 @@ app.post('/admin/mark-unpaid', adminActionLimiter, async function(req, res) {
     await pool.query('UPDATE confirmed_bookings SET paid_at = NULL WHERE conf_id = $1', [confId]);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Send payment receipt ─────────────────────────────────────────────────────
+app.post('/admin/send-receipt', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { confId, amount, method } = req.body;
+  if (!confId || !amount) return res.status(400).json({ error: 'Missing confId or amount' });
+  try {
+    const result = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    const row = result.rows[0];
+    const d = row.data || {};
+    const buyer = d.buyer || {};
+    const clientEmail = buyer.email || d.email || '';
+    if (!clientEmail) return res.status(400).json({ error: 'No client email on file' });
+    const clientName  = buyer.firstName || d.fullName || 'Client';
+    const firstName   = clientName.split(' ')[0];
+    const address     = d.address || '';
+    const service     = d.svcLabel || '';
+    const addons      = Array.isArray(d.addons) && d.addons.length ? d.addons.join(', ') : '';
+    const inspDate    = d.dateFmt || (d.date ? new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : '');
+    const paidAmt     = parseFloat(amount).toFixed(2);
+    const methodLabel = method ? method.charAt(0).toUpperCase() + method.slice(1) : 'On file';
+    const paidDate    = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+    const opCfg       = OPERATORS[row.operator] || OPERATORS.jaren;
+
+    const html = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;border-top:4px solid #C9A84C;padding-top:20px">'
+      + '<div style="text-align:center;background:#0F1C35;padding:18px;margin-bottom:24px;border-radius:6px">'
+      + '<div style="font-family:Georgia,serif;font-size:1.1rem;font-weight:700;color:#C9A84C;letter-spacing:2px">SAN TAN PROPERTY</div>'
+      + '<div style="font-family:Georgia,serif;font-size:.75rem;color:#E8C97A;letter-spacing:4px">INSPECTIONS</div>'
+      + '</div>'
+      + '<p style="font-size:1.1rem;font-weight:700;color:#1B2D52;margin-bottom:6px;">Payment Receipt</p>'
+      + '<p>Hi ' + firstName + ',</p>'
+      + '<p style="margin-top:12px;">Thank you for your payment. This email serves as your receipt for the home inspection at <strong>' + address + '</strong>.</p>'
+      + '<div style="background:#F8F6F2;border-radius:8px;padding:16px 20px;margin:20px 0;border-left:4px solid #C9A84C;">'
+      + '<div style="font-weight:700;font-size:1rem;color:#1B2D52;margin-bottom:12px;">Receipt Summary</div>'
+      + '<table style="width:100%;border-collapse:collapse;">'
+      + '<tr><td style="padding:5px 0;color:#666;width:140px">Property</td><td style="color:#1B2D52;font-weight:600">' + address + '</td></tr>'
+      + (inspDate ? '<tr><td style="padding:5px 0;color:#666">Inspection date</td><td style="color:#1B2D52;font-weight:600">' + inspDate + '</td></tr>' : '')
+      + (service ? '<tr><td style="padding:5px 0;color:#666">Service</td><td style="color:#1B2D52;font-weight:600">' + service + '</td></tr>' : '')
+      + (addons ? '<tr><td style="padding:5px 0;color:#666">Add-ons</td><td style="color:#1B2D52;font-weight:600">' + addons + '</td></tr>' : '')
+      + '<tr><td style="padding:5px 0;color:#666">Payment method</td><td style="color:#1B2D52;font-weight:600">' + methodLabel + '</td></tr>'
+      + '<tr><td style="padding:5px 0;color:#666">Date paid</td><td style="color:#1B2D52;font-weight:600">' + paidDate + '</td></tr>'
+      + '<tr style="border-top:2px solid #C9A84C;"><td style="padding:10px 0 5px;color:#1B2D52;font-weight:700;font-size:1.1rem">Total paid</td><td style="color:#1B2D52;font-weight:800;font-size:1.2rem">$' + paidAmt + '</td></tr>'
+      + '</table>'
+      + '</div>'
+      + '<p>If you have any questions, call or text us at <strong>' + opCfg.phone + '</strong> or reply to this email.</p>'
+      + '<p style="margin-top:20px;">' + opCfg.inspectorName + '<br><strong>San Tan Property Inspections</strong><br>' + opCfg.phone + '<br>'
+      + '<a href="https://santanpropertyinspections.com" style="color:#C9A84C;">santanpropertyinspections.com</a></p>'
+      + '<hr style="border:none;border-top:1px solid #E8DFC8;margin:20px 0"/>'
+      + '<p style="color:#888;font-size:.8rem">San Tan Property Inspections &middot; BTR #' + opCfg.btrNumber + '</p>'
+      + '</div>';
+
+    await sendEmail(clientEmail, 'Payment receipt — ' + address, html);
+    res.json({ success: true });
+  } catch(e) {
+    console.error('send-receipt:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Set payment method + auto-mark paid (or unpaid if method blank)
