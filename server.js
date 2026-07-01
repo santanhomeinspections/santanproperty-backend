@@ -1098,9 +1098,13 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
       const amendmentNote = (reportInfo && reportInfo.version && reportInfo.version > 1)
         ? '<p class="muted" style="margin-top:6px">This is the most recent version of your report (v' + reportInfo.version + ').</p>'
         : '';
+      const sentAtStr = (reportInfo && reportInfo.sentAt)
+        ? new Date(reportInfo.sentAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' })
+        : null;
       reportSection = '<div class="section section-good">'
         + '<h2>Your Report</h2>'
         + '<p>Your inspection report has been delivered to <strong>' + escapeHtml((buyer && buyer.email) || 'your email') + '</strong>.</p>'
+        + (sentAtStr ? '<p class="muted" style="margin-top:4px;font-size:.82rem;">Last sent: ' + escapeHtml(sentAtStr) + ' (Arizona time)</p>' : '')
         + (dlUrl
             ? '<a href="' + escapeHtml(dlUrl) + '" class="btn btn-primary" target="_blank" rel="noopener">Download Report (PDF)</a>'
             : '<p class="muted">If you can\'t find it, check your spam folder, or call/text ' + opPhone + ' and we will resend.</p>')
@@ -1305,6 +1309,7 @@ async function getReportInfoForConfId(confId) {
       pdfKey: row.pdf_key || null,
       pdfFilename: row.pdf_filename || null,
       version: row.report_version || null,
+      sentAt: row.sent_at || null,
     };
   } catch(e) {
     // Table may not exist on a fresh deploy, or column shapes may differ.
