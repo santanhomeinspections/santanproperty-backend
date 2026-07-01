@@ -2477,6 +2477,26 @@ app.get('/agreement/:token', agreementLimiter, async function(req, res) {
     return res.status(500).send('<h2>Database error. Please call (480) 618-0805.</h2>');
   }
 
+  // If not in pending store, try to rebuild from confirmed_bookings using agreementToken
+  if (!booking) {
+    try {
+      const fallback = await pool.query(
+        "SELECT data, conf_id, agreement_signed_at FROM confirmed_bookings WHERE data->>'agreementToken' = $1",
+        [token]
+      );
+      if (fallback.rows.length) {
+        const fb = fallback.rows[0];
+        // Re-populate the pending store so the page loads
+        const rebuildData = { ...fb.data, confId: fb.conf_id, agreeToken: token };
+        await dbSet('agree_' + token, rebuildData);
+        booking = rebuildData;
+        console.log('Agreement: rebuilt from confirmed_bookings for conf', fb.conf_id);
+      }
+    } catch(e2) {
+      console.error('Agreement fallback lookup failed:', e2.message);
+    }
+  }
+
   if (!booking) {
     return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Agreement — San Tan Property Inspections</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:60px 24px;background:#0F1C35;color:#fff">
@@ -4670,8 +4690,11 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       ${escapeHtml(((d.buyer && d.buyer.email) || 'No email on file'))} ·
       ${escapeHtml(((d.buyer && d.buyer.phone) || 'No phone on file'))}
     </p>
-    <button type="button" id="resendHubBtn" style="background:#C9A84C;color:#1B2D52;border:none;border-radius:6px;padding:10px 20px;font-weight:700;font-size:.9rem;cursor:pointer;width:100%;">
+    <button type="button" id="resendHubBtn" style="background:#C9A84C;color:#1B2D52;border:none;border-radius:6px;padding:10px 20px;font-weight:700;font-size:.9rem;cursor:pointer;width:100%;margin-bottom:8px;">
       ✉ Resend Hub Link to Client
+    </button>
+    <button type="button" id="resendAgreeBtn" style="background:transparent;color:#C9A84C;border:1px solid #C9A84C;border-radius:6px;padding:10px 20px;font-weight:700;font-size:.9rem;cursor:pointer;width:100%;">
+      📋 Resend Agreement Link
     </button>
     <div id="resendFlash" style="margin-top:12px;"></div>
     <div class="hint" style="margin-top:10px;">Sends a fresh email to the buyer with the link to their inspection hub. Use this if a client lost their original confirmation email.</div>
@@ -4756,6 +4779,34 @@ button[type=submit]:disabled{background:#888;cursor:not-allowed;}
       });
     });
   }
+
+  // Resend Agreement handler
+  var resendAgreeBtn = document.getElementById('resendAgreeBtn');
+  if (resendAgreeBtn) {
+    resendAgreeBtn.addEventListener('click', function() {
+      var resendFlash = document.getElementById('resendFlash');
+      resendAgreeBtn.disabled = true;
+      var origText = resendAgreeBtn.textContent.trim();
+      resendAgreeBtn.textContent = 'Sending...';
+      resendFlash.innerHTML = '';
+      fetch(form.action + '/resend-agreement', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+      .then(function(res){
+        if (res.ok && res.data.success) {
+          resendFlash.innerHTML = '<div class="flash flash-ok">Agreement link sent to ' + res.data.sentTo + '</div>';
+          resendAgreeBtn.textContent = 'Sent!';
+          setTimeout(function(){ resendAgreeBtn.disabled = false; resendAgreeBtn.textContent = origText; }, 3000);
+        } else {
+          resendFlash.innerHTML = '<div class="flash flash-bad">' + ((res.data && res.data.error) || 'Send failed.') + '</div>';
+          resendAgreeBtn.disabled = false; resendAgreeBtn.textContent = origText;
+        }
+      })
+      .catch(function(err){
+        resendFlash.innerHTML = '<div class="flash flash-bad">Error: ' + err.message + '</div>';
+        resendAgreeBtn.disabled = false; resendAgreeBtn.textContent = origText;
+      });
+    });
+  }
 })();
 </script>
 </body>
@@ -4830,6 +4881,63 @@ app.post('/admin/booking/:confId/resend-hub-link', adminActionLimiter, async fun
     res.json({ success: true, sentTo: buyer.email });
   } catch(e) {
     console.error('Resend hub link failed:', e.message);
+    res.status(500).json({ error: 'Could not send email: ' + e.message });
+  }
+});
+
+// ── ADMIN: RESEND AGREEMENT LINK ─────────────────────────────────────────────
+// Re-emails the agreement signing link to the client. Rebuilds the agree_ key
+// in pending_bookings so the link works even if it had previously expired.
+app.post('/admin/booking/:confId/resend-agreement', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const confId = req.params.confId;
+  if (!(await roleCanTouchBooking(adminRole(req), confId))) return res.status(403).json({ error: 'Forbidden' });
+
+  let row;
+  try {
+    const r = await pool.query('SELECT * FROM confirmed_bookings WHERE conf_id = $1', [confId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    row = r.rows[0];
+  } catch(e) { return res.status(500).json({ error: 'DB read failed: ' + e.message }); }
+
+  if (row.cancelled_at) return res.status(400).json({ error: 'Booking is cancelled.' });
+  const d = row.data || {};
+  const buyer = d.buyer || {};
+  if (!buyer.email) return res.status(400).json({ error: 'Buyer has no email on file.' });
+  if (!d.agreementToken) return res.status(400).json({ error: 'No agreement token — booking may pre-date this feature. Edit and re-save to generate one.' });
+
+  const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
+  const agreeToken = d.agreementToken;
+
+  // Re-populate pending_bookings so the link works again
+  const rebuildData = { ...d, confId, agreeToken };
+  await dbSet('agree_' + agreeToken, rebuildData);
+
+  const agreementUrl = withSig(BASE_URL + '/agreement/' + agreeToken, agreeToken);
+  const opCfg = operatorConfig(row.operator || d.operator);
+  const isSigned = !!row.agreement_signed_at;
+
+  try {
+    const html = emailWrap(
+      '<h2 style="color:#0F1C35">Your Inspection Agreement</h2>'
+      + '<p>Hi ' + escapeHtml(buyer.firstName || 'there') + ', here is your inspection agreement link as requested:</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.address || '') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.dateFmt || '') + ' @ ' + escapeHtml(d.time || '') + '</td></tr>'
+      + '</table>'
+      + (isSigned
+        ? '<div style="background:#E8F7EE;border-left:4px solid #1ab464;padding:14px 18px;margin:20px 0;border-radius:0 8px 8px 0"><p style="margin:0;color:#085041;"><strong>Your agreement has already been signed.</strong> Use the link below to view it.</p></div>'
+        : '<div style="background:#EAF3FB;border-left:4px solid #1B2D52;padding:16px 18px;margin:20px 0;border-radius:0 8px 8px 0"><p style="margin:0 0 12px;font-size:.84rem;color:#555;">Please review and sign your inspection agreement before your appointment.</p><a href="' + agreementUrl + '" style="display:inline-block;background:#1B2D52;color:white;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:700;font-size:.85rem">Sign Your Agreement →</a></div>')
+      + '<p>Questions? Call or text <strong>' + opCfg.phone + '</strong></p>'
+    );
+    await sendEmail(
+      buyer.email,
+      (isSigned ? 'Your Signed Agreement' : 'Action Required: Sign Your Inspection Agreement') + ' — ' + (d.dateFmt || '') + ' [' + confId + ']',
+      html, null, opCfg.replyTo
+    );
+    res.json({ success: true, sentTo: buyer.email });
+  } catch(e) {
+    console.error('Resend agreement failed:', e.message);
     res.status(500).json({ error: 'Could not send email: ' + e.message });
   }
 });
