@@ -212,6 +212,17 @@ async function initDb() {
       INSERT INTO discount_codes (code, pct) VALUES ('SAVE10', 10), ('SAVE20', 20)
       ON CONFLICT (code) DO NOTHING
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sms_log (
+        id          SERIAL PRIMARY KEY,
+        to_number   TEXT,
+        body        TEXT,
+        ok          BOOLEAN NOT NULL,
+        error       TEXT,
+        source      TEXT,
+        sent_at     TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     await pool.query(`DELETE FROM pending_bookings WHERE created_at < NOW() - INTERVAL '48 hours'`);
     console.log('DB ready');
   } catch (e) {
@@ -314,13 +325,15 @@ function fmtPhone(raw) {
 
 async function sms(to, body) {
   const num = fmtPhone(to);
-  if (!num) { console.warn('Bad phone, skipping SMS:', to); return; }
+  if (!num) { console.warn('Bad phone, skipping SMS:', to); await logSms(to, body, false, 'Could not normalize phone number'); return; }
   if (!QUO_API_KEY || !QUO_FROM) {
     console.warn('Quo not configured (QUO_API_KEY or QUO_PHONE_NUMBER missing), skipping SMS to ' + num);
+    await logSms(num, body, false, 'QUO_API_KEY or QUO_PHONE_NUMBER not configured');
     return;
   }
   if (num === QUO_FROM) {
     console.warn('Refusing to send SMS to self (from === to ===', num + ')');
+    await logSms(num, body, false, 'Refused: from === to');
     return;
   }
   try {
@@ -339,12 +352,27 @@ async function sms(to, body) {
     if (!res.ok) {
       const errText = await res.text().catch(function(){ return ''; });
       console.error('SMS error to ' + num + ': HTTP ' + res.status + ' ' + errText.slice(0, 200));
+      await logSms(num, body, false, 'HTTP ' + res.status + ': ' + errText.slice(0, 200));
       return;
     }
     console.log('SMS sent to ' + num);
+    await logSms(num, body, true, null);
   } catch (e) {
     console.error('SMS error to ' + num + ': ' + e.message);
+    await logSms(num, body, false, e.message);
   }
+}
+
+// Writes every SMS attempt (success or failure) to sms_log so it shows up
+// in the admin SMS log — this is the shared Postgres DB, so the inspector
+// app's report-delivery texts land in the same table.
+async function logSms(to, body, ok, error) {
+  try {
+    await pool.query(
+      'INSERT INTO sms_log (to_number, body, ok, error, source) VALUES ($1,$2,$3,$4,$5)',
+      [to || null, body || null, ok, error || null, 'website']
+    );
+  } catch (e) { console.warn('sms_log insert failed:', e.message); }
 }
 
 // ── HTML ESCAPING ─────────────────────────────────────────────
@@ -3143,7 +3171,7 @@ tr:hover td{background:rgba(201,168,76,.04);}
 <body>
 <nav>
   <h1>San Tan Property Inspections — Admin</h1>
-  <span style="display:flex;align-items:center;gap:14px"><span id="lastRefresh"></span><a href="/admin/logout" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Sign Out</a></span>
+  <span style="display:flex;align-items:center;gap:14px"><span id="lastRefresh"></span><a href="/admin/sms-log" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">SMS Log</a><a href="/admin/logout" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Sign Out</a></span>
 </nav>
 <div class="wrap">
   <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
@@ -3743,6 +3771,82 @@ setInterval(load, 60000);
 </html>`);
 });
 
+// ── ADMIN: SMS LOG ────────────────────────────────────────────────────────
+// Shows every text sent from either service (this website + the inspector
+// app), since both write to the same shared sms_log table.
+app.get('/admin/sms-log', adminAuthLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.redirect('/admin/login');
+
+  let rows = [];
+  try {
+    const r = await pool.query('SELECT * FROM sms_log ORDER BY sent_at DESC LIMIT 300');
+    rows = r.rows;
+  } catch (e) {
+    console.error('sms-log fetch:', e.message);
+  }
+
+  const rowsHtml = rows.length ? rows.map(function(row) {
+    const when = new Date(row.sent_at).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short' });
+    const statusBadge = row.ok
+      ? '<span class="badge badge-signed">Sent</span>'
+      : '<span class="badge badge-unsigned">Failed</span>';
+    const bodyPreview = (row.body || '').length > 140 ? escapeHtml(row.body.slice(0, 140)) + '…' : escapeHtml(row.body || '');
+    return '<tr>'
+      + '<td>' + when + '</td>'
+      + '<td>' + escapeHtml(row.to_number || '—') + '</td>'
+      + '<td>' + statusBadge + (row.error ? '<div class="resc-msg">' + escapeHtml(row.error) + '</div>' : '') + '</td>'
+      + '<td style="max-width:420px">' + bodyPreview + '</td>'
+      + '<td class="agent">' + escapeHtml(row.source || '—') + '</td>'
+      + '</tr>';
+  }).join('') : '<tr><td colspan="5" class="empty">No texts logged yet.</td></tr>';
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SMS Log — San Tan Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;color:#BEC8D8;min-height:100vh;}
+nav{background:#0a1428;border-bottom:2px solid #C9A84C;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}
+nav h1{font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:1px;text-transform:uppercase;}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 20px;}
+.card{background:#1B2D52;border-radius:10px;overflow:hidden;margin-bottom:20px;}
+.card-hd{padding:14px 20px;border-bottom:1px solid #243660;display:flex;align-items:center;justify-content:space-between;}
+.card-hd h2{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#C9A84C;}
+.card-hd span{font-size:.75rem;color:#4A5A7A;}
+table{width:100%;border-collapse:collapse;}
+th{padding:10px 16px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#4A5A7A;border-bottom:1px solid #243660;white-space:nowrap;}
+td{padding:12px 16px;font-size:.83rem;border-bottom:1px solid #162240;vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:rgba(201,168,76,.04);}
+.agent{font-size:.78rem;color:#8A9AB5;}
+.empty{padding:32px;text-align:center;color:#4A5A7A;font-size:.85rem;}
+.badge{display:inline-block;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.5px;}
+.badge-signed{background:rgba(26,180,100,.15);color:#1ab464;}
+.badge-unsigned{background:rgba(192,57,43,.15);color:#e8a87c;}
+.resc-msg{font-size:.72rem;color:#8A9AB5;margin-top:3px;font-style:italic;}
+</style>
+</head>
+<body>
+<nav>
+  <h1>SMS Log</h1>
+  <a href="/admin" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">← Back to admin</a>
+</nav>
+<div class="wrap">
+  <div class="card">
+    <div class="card-hd"><h2>Last 300 Texts</h2><span>Most recent first · both services</span></div>
+    <table>
+      <tr><th>Sent</th><th>To</th><th>Status</th><th>Message</th><th>Source</th></tr>
+      ${rowsHtml}
+    </table>
+  </div>
+</div>
+</body>
+</html>`);
+});
+
 // ── ADMIN API ROUTES ──────────────────────────────────────────
 app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
@@ -3813,6 +3917,21 @@ app.post('/admin/cancel-booking', adminActionLimiter, async function(req, res) {
       + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
     );
     try { await sendEmail(d.buyerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', agentHtml, null, opCfg.replyTo); } catch(e) {}
+  }
+
+  if (d.sellerAgent && d.sellerAgent.email) {
+    const sellerCancelHtml = emailWrap(
+      '<h2 style="color:#C0392B">Inspection Cancelled</h2>'
+      + '<p>Hi ' + escapeHtml(d.sellerAgent.name || 'there') + ',</p>'
+      + '<p>The inspection scheduled at your listing has been cancelled.</p>'
+      + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+      + '<tr><td style="padding:6px 0;color:#888;width:130px">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.address||'') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(d.dateFmt||'') + '</td></tr>'
+      + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#2C2C2C;font-weight:600">' + confId + '</td></tr>'
+      + '</table>'
+      + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
+    );
+    try { await sendEmail(d.sellerAgent.email, 'Inspection Cancelled — ' + (d.fullName||'') + ' [' + confId + ']', sellerCancelHtml, null, opCfg.replyTo); } catch(e) { console.error('Cancel seller agent email:', e.message); }
   }
 
   res.json({ success: true });
@@ -5206,22 +5325,22 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
 
   // ── Notify client if requested ───────────────────────────
   let notified = false;
+  // Build a "what changed" list once, shared by the client and agent emails below.
+  const changes = [];
+  if (newDate !== old.date)         changes.push('Date');
+  if (newTime !== old.time)         changes.push('Time');
+  if (newAddress !== old.address)   changes.push('Address');
+  if (svcLabel !== old.svcLabel)    changes.push('Service');
+  if (addonsLine !== old.addonsLine) changes.push('Add-Ons');
+  if (Number(finalPrice) !== Number(old.finalPrice)) changes.push('Price');
+  const changesLine = changes.length ? changes.join(', ') : 'Booking details';
+
   if (notifyClient && newBuyer.email) {
     try {
       const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
       const hubUrl = old.agreementToken
         ? withSig(BASE_URL + '/i/' + old.agreementToken, old.agreementToken)
         : null;
-
-      // Build a "what changed" list. Keep it factual and short.
-      const changes = [];
-      if (newDate !== old.date)         changes.push('Date');
-      if (newTime !== old.time)         changes.push('Time');
-      if (newAddress !== old.address)   changes.push('Address');
-      if (svcLabel !== old.svcLabel)    changes.push('Service');
-      if (addonsLine !== old.addonsLine) changes.push('Add-Ons');
-      if (Number(finalPrice) !== Number(old.finalPrice)) changes.push('Price');
-      const changesLine = changes.length ? changes.join(', ') : 'Booking details';
 
       const notifyHtml = emailWrap(
         '<h2 style="color:#0F1C35">Inspection Details Updated</h2>'
@@ -5254,6 +5373,34 @@ app.post('/admin/booking/:confId', adminActionLimiter, async function(req, res) 
       notified = true;
     } catch(e) {
       console.error('Notify client email failed:', e.message);
+    }
+
+    // Agents get a shorter version — just the fact that it changed and the new details.
+    const agentUpdateHtml = function(agentName) {
+      return emailWrap(
+        '<h2 style="color:#0F1C35">Inspection Details Updated</h2>'
+        + '<p>Hi ' + escapeHtml(agentName || 'there') + ', the inspection below has been updated:</p>'
+        + '<p style="color:#888;font-size:.85rem"><strong style="color:#1B2D52">What changed:</strong> ' + escapeHtml(changesLine) + '</p>'
+        + '<table style="width:100%;border-collapse:collapse;margin:16px 0">'
+        + '<tr><td style="padding:6px 0;color:#888;width:130px">Buyer</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml((newBuyer.firstName||'') + ' ' + (newBuyer.lastName||'')) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Property</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(newAddress) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Date</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(dateFmt) + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Time</td><td style="color:#2C2C2C;font-weight:600">' + escapeHtml(newTime) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</td></tr>'
+        + '<tr><td style="padding:6px 0;color:#888">Confirmation</td><td style="color:#C9A84C;font-weight:700">' + escapeHtml(confId) + '</td></tr>'
+        + '</table>'
+        + '<p>Questions? Call/text <strong>' + opCfg.phone + '</strong></p>'
+      );
+    };
+
+    if (newBA.email) {
+      try {
+        await sendEmail(newBA.email, 'Inspection Updated — ' + dateFmt + ' @ ' + newTime + ' [' + confId + ']', agentUpdateHtml(newBA.name), null, opCfg.replyTo);
+      } catch(e) { console.error('Notify buyer agent email failed:', e.message); }
+    }
+    if (newSA.email) {
+      try {
+        await sendEmail(newSA.email, 'Inspection Updated — ' + dateFmt + ' @ ' + newTime + ' [' + confId + ']', agentUpdateHtml(newSA.name), null, opCfg.replyTo);
+      } catch(e) { console.error('Notify seller agent email failed:', e.message); }
     }
   }
 
