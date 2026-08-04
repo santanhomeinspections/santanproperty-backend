@@ -2923,7 +2923,6 @@ app.get('/auth/google', function(req, res) {
 });
 app.get('/auth/google/callback', async function(req, res) {
   const result = await oAuth2Client.getToken(req.query.code);
-  console.log('REFRESH TOKEN:', result.tokens.refresh_token);
   res.send('<pre>Add to Railway as GOOGLE_REFRESH_TOKEN:\n\n' + result.tokens.refresh_token + '</pre>');
 });
 
@@ -3248,13 +3247,16 @@ function esc(s) {
     .replace(/'/g, '&#39;');
 }
 
+let _bookingsLoaded = 100;
 async function load() {
   try {
     // Fetch dashboard data + reports map in parallel. The reports map is keyed
     // by confId and tells us which bookings have a report (and which are delivered),
     // so we can render View Report / Edit in Inspector buttons accordingly.
+    // Always request however many bookings are currently loaded on screen —
+    // so periodic auto-refresh doesn't discard rows from a previous "Load More".
     const [r, rm] = await Promise.all([
-      fetch('/admin/data'),
+      fetch('/admin/data?limit=' + _bookingsLoaded),
       fetch('/admin/reports-map').catch(function(){ return null; }),
     ]);
     // Session expired or not logged in → bounce to the login page.
@@ -3273,21 +3275,19 @@ async function load() {
     // "/?edit={id}" or "/#/reports/{id}" later if the inspector adds a deep-link handler.
     const INSPECTOR_EDIT_PATH_TPL = ${JSON.stringify(process.env.INSPECTOR_EDIT_PATH_TPL || '')};
 
-    const totalRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s + (b.data.finalPrice||0); }, 0);
-    const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
-    const monthJobs = d.bookings.filter(function(b){ return new Date(b.confirmed_at) >= thisMonth; }).length;
-    const monthRev  = d.bookings.filter(function(b){ return b.paid_at && new Date(b.confirmed_at) >= thisMonth; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
-    const agentCount = {};
-    d.bookings.forEach(function(b){ const n=b.data.buyerAgent&&b.data.buyerAgent.name?b.data.buyerAgent.name:'Unknown'; agentCount[n]=(agentCount[n]||0)+1; });
-    const topAgent = Object.entries(agentCount).sort(function(a,b){return b[1]-a[1];})[0];
-    const paidRev = d.bookings.filter(function(b){ return b.paid_at; }).reduce(function(s,b){ return s+(b.data.finalPrice||0);},0);
-    const unpaidCount = d.bookings.filter(function(b){ return !b.paid_at && !b.cancelled_at; }).length;
-    const unsignedCount = d.bookings.filter(function(b){ return !b.agreement_signed_at && !b.cancelled_at; }).length;
+    const s = d.stats || {};
+    const totalRev = s.totalCollected || 0;
+    const monthJobs = s.monthJobs || 0;
+    const monthRev  = s.monthRevenue || 0;
+    const topAgent = s.topAgentName ? [s.topAgentName, s.topAgentCount] : null;
+    const paidRev = s.totalCollected || 0;
+    const unpaidCount = s.unpaidCount || 0;
+    const unsignedCount = s.unsignedCount || 0;
 
     document.getElementById('stats').innerHTML =
-      '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+d.bookings.length+'</div><div class="sub">all time</div></div>' +
+      '<div class="stat"><div class="lbl">Total Jobs</div><div class="val">'+(s.totalJobs||0)+'</div><div class="sub">all time</div></div>' +
       '<div class="stat"><div class="lbl">Total Collected</div><div class="val">$'+totalRev.toLocaleString()+'</div><div class="sub">paid jobs only</div></div>' +
-      '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+d.bookings.filter(function(b){return b.paid_at;}).length+' jobs paid</div></div>' +
+      '<div class="stat"><div class="lbl">Collected</div><div class="val" style="color:#1ab464">$'+paidRev.toLocaleString()+'</div><div class="sub">'+(s.paidCount||0)+' jobs paid</div></div>' +
       '<div class="stat"><div class="lbl">This Month</div><div class="val">'+monthJobs+'</div><div class="sub">$'+monthRev.toLocaleString()+' collected</div></div>' +
       '<div class="stat"><div class="lbl">Top Agent</div><div class="val" style="font-size:1rem;padding-top:4px">'+(topAgent?topAgent[0]:'—')+'</div><div class="sub">'+(topAgent?topAgent[1]+' booking'+(topAgent[1]>1?'s':''):'')+'</div></div>' +
       '<div class="stat"><div class="lbl">Awaiting Payment</div><div class="val" style="color:'+(unpaidCount>0?'#e8a87c':'#C9A84C')+'">'+unpaidCount+'</div><div class="sub">unconfirmed</div></div>' +
@@ -3303,7 +3303,7 @@ async function load() {
     renderHealth(d.bookings || [], d.reschedules || []);
     window._lastBookings = d.bookings || [];
 
-    document.getElementById('bookingCount').textContent = d.bookings.length + ' total';
+    document.getElementById('bookingCount').textContent = d.bookings.length + ' of ' + (d.bookingsTotal||d.bookings.length) + ' total';
     if (!d.bookings.length) {
       document.getElementById('bookingTable').innerHTML = '<div class="empty">No confirmed bookings yet.</div>';
     } else {
@@ -3372,7 +3372,8 @@ async function load() {
           '<td><div class="price">'+discBadge+tripBadge+'$'+(bd.finalPrice||'—')+(b.miles!=null?' <span class="badge" style="background:#243660;color:#8A9AB5;border:1px solid #344870;font-weight:600">↔ '+Number(b.miles).toFixed(1)+' mi</span>':'')+'</div><div style="font-size:.72rem;color:#4A5A7A">'+esc(bd.dateFmt||'')+' @ '+esc(bd.time||'')+'</div><div style="margin-top:4px">'+signedBadge+pdfLink+counterSignUi+'</div><div>'+payDropdown+editLink+cancelBtn+'</div>'+(reportBtns?'<div style="margin-top:2px">'+reportBtns+'</div>':'')+'</td>' +
           '</tr>';
       }).join('');
-      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      document.getElementById('bookingTable').innerHTML = '<table><thead><tr><th>Conf #</th><th>Buyer / Address</th><th>Service</th><th>Agent</th><th>Total / Date / Status</th></tr></thead><tbody>'+rows+'</tbody></table>' +
+        (d.bookingsHasMore ? '<div style="text-align:center;padding:16px;"><button onclick="loadMoreBookings()" id="loadMoreBtn" style="background:#1B2D52;color:#C9A84C;border:1px solid #C9A84C;border-radius:6px;padding:9px 20px;font-size:.8rem;font-weight:700;cursor:pointer;">Load 100 More</button></div>' : '');
     }
 
     document.getElementById('rescheduleCount').textContent = d.reschedules.length + ' total';
@@ -3393,6 +3394,16 @@ async function load() {
 
     document.getElementById('lastRefresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch(e) { console.error(e); }
+}
+
+// "Load 100 More" — bumps how many bookings load() requests, then re-runs it.
+// _bookingsLoaded persists across the periodic auto-refresh too, so scrolled-in
+// rows don't disappear the next time load() runs on its own.
+async function loadMoreBookings() {
+  const btn = document.getElementById('loadMoreBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  _bookingsLoaded += 100;
+  await load();
 }
 
 async function cancelBooking(confId) {
@@ -4367,11 +4378,18 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
   // Jeff's admin is scoped to his own data; Jaren sees everything.
   const scoped = role !== 'jaren';
   const opFilterConfirmed = scoped ? " WHERE operator = 'jeff'" : '';
+  const opFilterConfirmedAnd = scoped ? " AND operator = 'jeff'" : '';
   // pending rows: keep the existing 48h + non-agree filter, add operator if scoped.
   const pendingWhere = "WHERE created_at > NOW() - INTERVAL '48 hours' AND token NOT LIKE 'agree_%'" + (scoped ? " AND operator = 'jeff'" : '');
+  // Pagination for the bookings LIST only — stats below are computed
+  // separately via SQL aggregates so they stay accurate for your full
+  // history no matter how many bookings load into the list at once.
+  const limit  = Math.min(parseInt(req.query.limit, 10)  || 100, 500);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   try {
-    const [bookings, reschedules, codes, pending, mileageAgg, jeffTally] = await Promise.all([
-      pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings' + opFilterConfirmed + ' ORDER BY confirmed_at DESC'),
+    const [bookings, bookingsCount, reschedules, codes, pending, mileageAgg, jeffTally, statsAgg, topAgentAgg] = await Promise.all([
+      pool.query('SELECT *, agreement_signed_at, agreement_signature FROM confirmed_bookings' + opFilterConfirmed + ' ORDER BY confirmed_at DESC LIMIT $1 OFFSET $2', [limit, offset]),
+      pool.query('SELECT COUNT(*)::int AS cnt FROM confirmed_bookings' + opFilterConfirmed),
       pool.query('SELECT * FROM reschedule_requests ORDER BY requested_at DESC'),
       pool.query('SELECT * FROM discount_codes ORDER BY created_at DESC'),
       pool.query("SELECT token, data, created_at FROM pending_bookings " + pendingWhere + " ORDER BY created_at DESC"),
@@ -4382,7 +4400,7 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
           COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('month', NOW())), 0) AS month_miles,
           COALESCE(SUM(miles) FILTER (WHERE confirmed_at >= date_trunc('year',  NOW())), 0) AS ytd_miles
         FROM confirmed_bookings
-        WHERE cancelled_at IS NULL` + (scoped ? " AND operator = 'jeff'" : '') + `
+        WHERE cancelled_at IS NULL` + opFilterConfirmedAnd + `
       `),
       // Jeff sub-contractor tally: completed (delivered) Jeff inspections × $50.
       // Counts reports for Jeff's bookings that have been delivered. Only shown to Jaren.
@@ -4391,9 +4409,33 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
         FROM confirmed_bookings cb
         WHERE cb.operator = 'jeff' AND cb.cancelled_at IS NULL
       `),
+      // Stats aggregates — computed server-side over the FULL table (not just
+      // the current page of bookings) so these numbers are always accurate,
+      // regardless of how many rows the list has actually loaded on screen.
+      pool.query(`
+        SELECT
+          COUNT(*)::int AS total_jobs,
+          COUNT(*) FILTER (WHERE paid_at IS NOT NULL)::int AS paid_count,
+          COALESCE(SUM((data->>'finalPrice')::numeric) FILTER (WHERE paid_at IS NOT NULL), 0) AS total_collected,
+          COUNT(*) FILTER (WHERE confirmed_at >= date_trunc('month', NOW()))::int AS month_jobs,
+          COALESCE(SUM((data->>'finalPrice')::numeric) FILTER (WHERE paid_at IS NOT NULL AND confirmed_at >= date_trunc('month', NOW())), 0) AS month_revenue,
+          COUNT(*) FILTER (WHERE paid_at IS NULL AND cancelled_at IS NULL)::int AS unpaid_count,
+          COUNT(*) FILTER (WHERE agreement_signed_at IS NULL AND cancelled_at IS NULL)::int AS unsigned_count
+        FROM confirmed_bookings` + opFilterConfirmed + `
+      `),
+      // Top agent — grouped count across the FULL history, not just the loaded page.
+      pool.query(`
+        SELECT COALESCE(data->'buyerAgent'->>'name', 'Unknown') AS name, COUNT(*)::int AS cnt
+        FROM confirmed_bookings` + opFilterConfirmed + `
+        GROUP BY 1
+        ORDER BY cnt DESC
+        LIMIT 1
+      `),
     ]);
     const m = mileageAgg.rows[0] || {};
     const jeffCount = (jeffTally.rows[0] && jeffTally.rows[0].cnt) || 0;
+    const stats = statsAgg.rows[0] || {};
+    const topAgent = topAgentAgg.rows[0] || null;
     // Pre-build hub URLs server-side so client JS doesn't need signToken
     const bookingsWithHub = bookings.rows.map(function(b) {
       const token = b.data && b.data.agreementToken;
@@ -4402,6 +4444,8 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
     res.json({
       role: role,
       bookings: bookingsWithHub,
+      bookingsTotal: bookingsCount.rows[0].cnt,
+      bookingsHasMore: offset + bookings.rows.length < bookingsCount.rows[0].cnt,
       reschedules: reschedules.rows,
       codes: codes.rows,
       pending: pending.rows,
@@ -4411,6 +4455,19 @@ app.get('/admin/data', adminActionLimiter, async function(req, res) {
       },
       // Only meaningful for Jaren's view; harmless for Jeff (his own count).
       jeffOwes: { count: jeffCount, rate: 50, total: jeffCount * 50 },
+      // Server-computed stats — accurate for full history regardless of
+      // how many booking rows are currently loaded on the page.
+      stats: {
+        totalJobs: stats.total_jobs || 0,
+        paidCount: stats.paid_count || 0,
+        totalCollected: Number(stats.total_collected) || 0,
+        monthJobs: stats.month_jobs || 0,
+        monthRevenue: Number(stats.month_revenue) || 0,
+        unpaidCount: stats.unpaid_count || 0,
+        unsignedCount: stats.unsigned_count || 0,
+        topAgentName: topAgent ? topAgent.name : null,
+        topAgentCount: topAgent ? topAgent.cnt : 0,
+      },
     });
   } catch(e) {
     res.status(500).json({ error: 'DB error' });
