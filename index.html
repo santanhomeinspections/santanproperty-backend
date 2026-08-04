@@ -1268,7 +1268,7 @@ async function submitContact(){
   if(!message){showToast('Please enter a message.',true);return;}
   btn.disabled=true;if(spin)spin.style.display='block';
   try{
-    const r=await fetch('https://santanproperty-backend-production.up.railway.app/api/contact',{
+    const r=await fetch(API+'/contact',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name,phone,email,role,message})
     });
