@@ -35,6 +35,48 @@ function signToken(token) {
   return crypto.createHmac('sha256', LINK_HMAC_SECRET).update(String(token)).digest('hex').slice(0, 12);
 }
 
+// ── FRIENDLY HUB TOKENS ───────────────────────────────────────
+// Hub/agreement links used to be a bare UUID ("a3f9c81e-7b2d-...") — secure,
+// but unreadable and easy to mistake for spam when texted to a client. New
+// tokens are now "<address-slug>-<random suffix>", e.g. "1234sanmiguel-7k2p9x".
+// The address half is just for readability — it's public info (yard sign, MLS
+// listing), so it can NEVER be the thing standing between a stranger and a
+// client's signed agreement or report. The random suffix is what actually
+// keeps this secure, same as the old UUID did. Existing tokens already issued
+// as plain UUIDs keep working exactly as before — nothing here touches them.
+function addressToSlug(address) {
+  if (!address) return '';
+  const streetPart = String(address).split(',')[0];      // drop city/state/zip
+  const clean = streetPart.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return clean.slice(0, 24);                              // keep URLs reasonable
+}
+function randomSuffix(len) {
+  // No 0/O/1/l/I — a client may need to read this off a screenshot or a
+  // printed page, and those characters are easy to misread against each other.
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < len; i++) out += chars[crypto.randomInt(chars.length)];
+  return out;
+}
+async function generateHubToken(address) {
+  const slug = addressToSlug(address);
+  // Retry on the astronomically unlikely chance of a collision — cheap
+  // insurance since we're already hitting the DB for the booking insert.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = slug ? (slug + '-' + randomSuffix(6)) : randomSuffix(10);
+    try {
+      const existing = await pool.query(
+        `SELECT 1 FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
+        [candidate]
+      );
+      if (!existing.rows.length) return candidate;
+    } catch (e) {
+      return candidate; // if the check itself fails, don't block booking confirmation over it
+    }
+  }
+  return slug + '-' + randomSuffix(10); // extremely unlucky fallback, still practically unique
+}
+
 function verifySignedToken(token, providedSig) {
   if (!token) return { ok: false, reason: 'missing-token' };
   if (!providedSig) {
@@ -1160,6 +1202,15 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Your Inspection — San Tan Property Inspections</title>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="San Tan Property Inspections"/>
+<meta property="og:title" content="${escapeHtml('Your Inspection Hub' + (address ? ' — ' + address : ''))}"/>
+<meta property="og:description" content="View your agreement, report status, and more for your San Tan Property Inspection."/>
+<meta property="og:image" content="https://santanpropertyinspections.com/logo-gold.jpg"/>
+<meta property="og:image:width" content="300"/>
+<meta property="og:image:height" content="175"/>
+<meta property="og:url" content="${escapeHtml((process.env.RAILWAY_URL || 'https://santanpropertyinspections.com') + '/i/' + hubToken)}"/>
+<meta name="twitter:card" content="summary"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;padding:24px 16px;color:#222;}
@@ -2258,7 +2309,7 @@ app.get('/confirm/:token', async function(req, res) {
 
   // Generate agreement token for this confirmed booking
   // Used for BOTH the agreement page and the customer hub — same token, same HMAC sig.
-  const agreeToken = uuidv4();
+  const agreeToken = await generateHubToken(booking && booking.address);
   const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
   const agreementUrl = withSig(BASE_URL + '/agreement/' + agreeToken, agreeToken);
   const hubUrl       = withSig(BASE_URL + '/i/'         + agreeToken, agreeToken);
