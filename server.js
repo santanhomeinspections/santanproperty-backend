@@ -1917,7 +1917,7 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
   const extraEmailsLineOwner = extraEmails.length ? '<p><b>Extra Report Recipients:</b> ' + escapeHtml(extraEmails.join(', ')) + '</p>' : '';
   const discountLineOwner  = discountCode ? '<p style="background:#e8f7ee;padding:10px;border-radius:6px"><b>Discount Code:</b> ' + escapeHtml(discountCode) + ' (' + (Number(discountPct)||0) + '% off — −$' + (Number(discountAmount)||0) + ')</p>' : '';
 
-  const ownerHtml = '<div style="font-family:Arial,sans-serif;max-width:560px">'
+  const ownerHtml = emailWrap('<div style="font-family:Arial,sans-serif;max-width:560px">'
     + '<h2>New Booking Request — ' + escapeHtml(confId) + '</h2>'
     + '<p><b>Service:</b> ' + escapeHtml(svcLabel) + '<br><b>Add-ons:</b> ' + escapeHtml(addonsLine) + '</p>'
     + '<p><b>Date/Time:</b> ' + escapeHtml(dateFmt) + ' @ ' + escapeHtml(time) + (endTime ? ' to ' + escapeHtml(endTime) : '') + '</p>'
@@ -1932,8 +1932,8 @@ app.post('/api/book', bookingLimiter, async function(req, res) {
     + '&nbsp;&nbsp;'
     + '<a href="' + cancelUrl + '" style="background:#C0392B;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">CANCEL</a>'
     + '</div>'
-    + '<p style="color:#888;font-size:.8rem">' + (opCfg.sms ? 'Texts' : 'Emails') + ' will NOT go out until you tap Confirm.</p>'
-    + '</div>';
+    + '<p style="color:#888;font-size:.8rem">' + (opCfg.sms ? 'Texts' : 'Emails') + ' will NOT go out until you tap Confirm, then Confirm again on the review page.</p>'
+    + '</div>');
 
   // Notify the operator(s). For jaren: email to OWNER_EMAIL + owner SMS.
   // For jeff: email to BOTH Jeff and Jaren (per setup), and NO SMS.
@@ -2208,6 +2208,36 @@ app.get('/confirm/:token', async function(req, res) {
     return res.status(403).send('<h2>Invalid or expired link. Check your email for the original confirmation message, or call (480) 618-0805.</h2>');
   }
   if (sigCheck.legacy) console.warn('Confirm: accepting legacy unsigned token (pre-HMAC migration)');
+
+  // Step 1 (default): show a plain review page, no state change yet. This is
+  // the page an email security scanner's automatic link pre-fetch will land
+  // on — since scanners fetch the literal email link and stop there, this
+  // alone can never trigger a real confirmation. Uses a safe read-only lookup
+  // (dbGet), not the atomic claim, so nothing gets consumed by just viewing it.
+  if (req.query.step !== '2') {
+    let preview;
+    try {
+      preview = await dbGet(req.params.token);
+    } catch(e) {
+      console.error('DB read error:', e.message);
+      return res.send('<h2>Database error. Please try again or call (480) 618-0805.</h2>');
+    }
+    if (!preview) return res.send('<h2>This booking has already been confirmed or the link has expired. Check your inbox for confirmation details, or call (480) 618-0805.</h2>');
+    const opCfgPreview = OPERATORS[String(preview.operator || 'jaren').toLowerCase()] || OPERATORS.jaren;
+    const continueUrl = req.originalUrl + (req.originalUrl.includes('?') ? '&' : '?') + 'step=2';
+    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Confirm Booking</title></head>
+      <body style="font-family:Arial,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;">
+      <h2>Confirm This Booking?</h2>
+      <p><b>Buyer:</b> ${escapeHtml(preview.fullName || '')}</p>
+      <p><b>Address:</b> ${escapeHtml(preview.address || '')}</p>
+      <p><b>Date/Time:</b> ${escapeHtml(preview.dateFmt || '')} @ ${escapeHtml(preview.time || '')}</p>
+      <p><b>Est. Total:</b> $${Number(preview.finalPrice)||0}</p>
+      <div style="margin:28px 0">
+      <a href="${continueUrl}" style="background:#1B2D52;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">${opCfgPreview.sms ? 'CONFIRM AND SEND TEXTS' : 'CONFIRM AND SEND EMAILS'}</a>
+      </div>
+      <p style="color:#888;font-size:.85rem">Nothing has been sent yet — tap the button above to confirm and notify the buyer.</p>
+      </body></html>`);
+  }
 
   let booking;
   try {
@@ -2959,11 +2989,29 @@ app.get('/cancel/:token', async function(req, res) {
   }
   if (!booking) return res.send('<h2>This link has expired or already been used.</h2>');
   const { confId, fullName, dateFmt, time } = booking;
+
+  // Step 1 (default): review-only page, no state change — protects against
+  // email security scanners auto-visiting and silently cancelling a booking
+  // before the owner ever sees the email. Real cancellation only happens
+  // after a genuine click through to step=2 below.
+  if (req.query.step !== '2') {
+    const continueUrl = req.originalUrl + (req.originalUrl.includes('?') ? '&' : '?') + 'step=2';
+    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Cancel Booking</title></head>
+      <body style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:0 16px;">
+      <h2 style="color:#C0392B">Cancel This Booking?</h2>
+      <p>${escapeHtml(fullName || '')} — ${escapeHtml(dateFmt || '')} @ ${escapeHtml(time || '')}</p>
+      <div style="margin:28px 0">
+      <a href="${continueUrl}" style="background:#C0392B;color:white;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:700">YES, CANCEL THIS BOOKING</a>
+      </div>
+      <p style="color:#888;font-size:.85rem">Nothing has been cancelled yet — tap the button above to confirm.</p>
+      </body></html>`);
+  }
+
   try { await dbDelete(req.params.token); } catch(e) { console.error('DB delete error:', e.message); }
   console.log('Booking cancelled: ' + confId);
   res.send('<div style="font-family:Arial,sans-serif;max-width:500px;margin:60px auto;text-align:center;padding:40px;border-top:4px solid #C0392B">'
     + '<h2 style="color:#C0392B">Booking Cancelled</h2>'
-    + '<p>The booking for <b>' + fullName + '</b> on ' + dateFmt + ' @ ' + time + ' has been cancelled.</p>'
+    + '<p>The booking for <b>' + escapeHtml(fullName || '') + '</b> on ' + escapeHtml(dateFmt || '') + ' @ ' + escapeHtml(time || '') + ' has been cancelled.</p>'
     + '<p>No texts were sent.</p>'
     + '</div>');
 });
@@ -3215,7 +3263,12 @@ tr:hover td{background:rgba(201,168,76,.04);}
 .badge-signed{background:rgba(26,180,100,.15);color:#1ab464;}
 .badge-unsigned{background:rgba(192,57,43,.15);color:#e8a87c;}
 .resc-msg{font-size:.78rem;color:#8A9AB5;margin-top:3px;font-style:italic;}
-@media(max-width:600px){th:nth-child(4),td:nth-child(4),th:nth-child(5),td:nth-child(5){display:none;}}
+#pendingTable,#bookingTable,#rescheduleTable{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+@media(max-width:600px){
+  th,td{padding:9px 10px;font-size:.78rem;}
+  th{font-size:.62rem;}
+  table{min-width:640px;} /* forces horizontal scroll instead of clipping/hiding columns */
+}
 </style>
 </head>
 <body>
