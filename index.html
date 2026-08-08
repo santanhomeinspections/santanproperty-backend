@@ -1250,7 +1250,7 @@ function initAutocomplete(){
   const input=document.getElementById('propAddr');
   if(!input||typeof google==='undefined')return;
   const ac=new google.maps.places.Autocomplete(input,{types:['address'],componentRestrictions:{country:'us'},fields:['formatted_address']});
-  ac.addListener('place_changed',function(){const place=ac.getPlace();if(place.formatted_address){input.value=place.formatted_address;input.classList.remove('err');checkServiceArea();}});
+  ac.addListener('place_changed',function(){const place=ac.getPlace();if(place.formatted_address){input.value=place.formatted_address.replace(/,?\s*USA\s*$/i,'');input.classList.remove('err');checkServiceArea();}});
 }
 window.initAutocomplete=initAutocomplete;
 
