@@ -633,11 +633,16 @@ function parseServiceCity(address) {
 //   city  = matched service city (lowercase) or null
 // Always hits Distance Matrix when GOOGLE_MAPS_API_KEY + OWNER_ADDRESS are set,
 // regardless of service city — we want the actual driving distance for mileage tracking.
+let _tripChargeConfigAlertAt = 0;
 async function checkTripCharge(address) {
   const matchedCity = parseServiceCity(address);
 
   if (!process.env.GOOGLE_MAPS_API_KEY || !process.env.OWNER_ADDRESS) {
     if (!process.env.GOOGLE_MAPS_API_KEY) console.warn('Trip charge: missing GOOGLE_MAPS_API_KEY');
+    if (process.env.OWNER_PHONE && Date.now() - _tripChargeConfigAlertAt > 3600000) {
+      _tripChargeConfigAlertAt = Date.now();
+      sms(process.env.OWNER_PHONE, '[San Tan Alert] Trip charge is NOT configured (missing GOOGLE_MAPS_API_KEY or OWNER_ADDRESS) — no trip charges are being applied to any booking until this is fixed.').catch(function(){});
+    }
     return { apply: false, miles: null, city: matchedCity };
   }
 
@@ -667,6 +672,9 @@ async function checkTripCharge(address) {
     }
   } catch (e) {
     console.warn('Trip charge distance lookup failed:', e.message);
+    if (process.env.OWNER_PHONE) {
+      sms(process.env.OWNER_PHONE, '[San Tan Alert] Trip charge distance lookup FAILED for a new booking (' + address + '). Trip charge could not be calculated and was NOT applied — check this booking\'s price manually. Error: ' + e.message).catch(function(){});
+    }
   }
 
   // Trip charge only applies if NOT a service city AND distance >= threshold
