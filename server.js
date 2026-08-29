@@ -265,6 +265,23 @@ async function initDb() {
         sent_at     TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS saved_contacts (
+        id           SERIAL PRIMARY KEY,
+        type         TEXT NOT NULL,           -- 'agent' or 'customer'
+        name         TEXT,
+        brokerage    TEXT,
+        phone        TEXT,
+        email        TEXT,
+        notes        TEXT,
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS saved_contacts_type_email_idx
+      ON saved_contacts (type, LOWER(email)) WHERE email IS NOT NULL AND email <> ''
+    `);
     await pool.query(`DELETE FROM pending_bookings WHERE created_at < NOW() - INTERVAL '48 hours'`);
     console.log('DB ready');
   } catch (e) {
@@ -420,6 +437,47 @@ async function logSms(to, body, ok, error) {
 // ── HTML ESCAPING ─────────────────────────────────────────────
 // Used anywhere user-controlled data is interpolated into HTML/email/form output.
 // Prevents stored XSS via booking fields (name, address, agent info, etc.).
+// Saves or refreshes a contact (agent or customer). Matches on email when
+// present (case-insensitive) so the same person doesn't get duplicated across
+// bookings — instead their name/phone/brokerage just get refreshed with the
+// latest info, and last_used_at bumps so recently-active contacts sort first.
+async function saveContact(type, info) {
+  const name = (info.name || '').trim();
+  const email = (info.email || '').trim();
+  const phone = (info.phone || '').trim();
+  const brokerage = (info.brokerage || '').trim();
+  if (!name && !email && !phone) return; // nothing worth saving
+  try {
+    if (email) {
+      await pool.query(
+        `INSERT INTO saved_contacts (type, name, brokerage, phone, email, last_used_at)
+         VALUES ($1,$2,$3,$4,$5,NOW())
+         ON CONFLICT (type, LOWER(email)) WHERE email IS NOT NULL AND email <> ''
+         DO UPDATE SET name = EXCLUDED.name, brokerage = EXCLUDED.brokerage, phone = EXCLUDED.phone, last_used_at = NOW()
+         WHERE saved_contacts.type = $1`,
+        [type, name, brokerage || null, phone || null, email]
+      );
+    } else {
+      // No email to match on — only insert if we don't already have this
+      // exact name+phone on file, to avoid piling up obvious duplicates.
+      const existing = await pool.query(
+        `SELECT id FROM saved_contacts WHERE type = $1 AND LOWER(name) = LOWER($2) AND phone = $3 LIMIT 1`,
+        [type, name, phone || null]
+      );
+      if (existing.rows.length) {
+        await pool.query(`UPDATE saved_contacts SET last_used_at = NOW() WHERE id = $1`, [existing.rows[0].id]);
+      } else {
+        await pool.query(
+          `INSERT INTO saved_contacts (type, name, brokerage, phone, email, last_used_at) VALUES ($1,$2,$3,$4,NULL,NOW())`,
+          [type, name, brokerage || null, phone || null]
+        );
+      }
+    }
+  } catch (e) {
+    console.warn('saveContact failed:', e.message);
+  }
+}
+
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   return String(s)
@@ -2272,6 +2330,16 @@ app.get('/confirm/:token', async function(req, res) {
   const baBrok  = ba.brokerage || '';
   const hasBA   = !!(baName || baPhone || baEmail);
 
+  // Auto-capture contacts from every confirmed booking — builds the saved
+  // agent/customer lists over time with zero manual entry. Fire-and-forget:
+  // a contact-save failure should never block or break booking confirmation.
+  saveContact('customer', { name: fullName, phone: buyer.phone, email: buyer.email }).catch(()=>{});
+  if (hasBA) saveContact('agent', { name: baName, brokerage: baBrok, phone: baPhone, email: baEmail }).catch(()=>{});
+  const saForContacts = (sellerAgent && typeof sellerAgent === 'object') ? sellerAgent : {};
+  if (saForContacts.name || saForContacts.phone || saForContacts.email) {
+    saveContact('agent', { name: saForContacts.name, brokerage: saForContacts.brokerage, phone: saForContacts.phone, email: saForContacts.email }).catch(()=>{});
+  }
+
   // Token already removed by dbClaim — no separate dbDelete needed
 
   const sm2     = slotToMins(time);
@@ -3282,7 +3350,7 @@ tr:hover td{background:rgba(201,168,76,.04);}
 <body>
 <nav>
   <h1>San Tan Property Inspections — Admin</h1>
-  <span style="display:flex;align-items:center;gap:14px"><span id="lastRefresh"></span><a href="/admin/sms-log" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">SMS Log</a><a href="/admin/logout" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Sign Out</a></span>
+  <span style="display:flex;align-items:center;gap:14px"><span id="lastRefresh"></span><a href="/admin/new-inspection" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">+ New Inspection</a><a href="/admin/contacts" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Contacts</a><a href="/admin/sms-log" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">SMS Log</a><a href="/admin/logout" style="color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px">Sign Out</a></span>
 </nav>
 <div class="wrap">
   <div class="stats" id="stats"><div class="stat"><div class="lbl">Loading...</div><div class="val">—</div></div></div>
@@ -3897,6 +3965,48 @@ setInterval(load, 60000);
 // ── ADMIN: SMS LOG ────────────────────────────────────────────────────────
 // Shows every text sent from either service (this website + the inspector
 // app), since both write to the same shared sms_log table.
+// ── CONTACTS: search + manage ──────────────────────────────────────────────
+// Shared by the Contacts admin page and the New Inspection form's autocomplete.
+app.get('/admin/contacts-search', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const type = req.query.type === 'customer' ? 'customer' : 'agent';
+  const q = (req.query.q || '').trim();
+  try {
+    let result;
+    if (q) {
+      result = await pool.query(
+        `SELECT * FROM saved_contacts WHERE type = $1 AND (name ILIKE $2 OR email ILIKE $2 OR phone ILIKE $2 OR brokerage ILIKE $2)
+         ORDER BY last_used_at DESC LIMIT 20`,
+        [type, '%' + q + '%']
+      );
+    } else {
+      result = await pool.query(`SELECT * FROM saved_contacts WHERE type = $1 ORDER BY last_used_at DESC LIMIT 50`, [type]);
+    }
+    res.json({ contacts: result.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/admin/contacts-save', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { type, name, brokerage, phone, email } = req.body;
+  if (!type || (type !== 'agent' && type !== 'customer')) return res.status(400).json({ error: 'Invalid type' });
+  if (!name && !email && !phone) return res.status(400).json({ error: 'Enter at least a name, phone, or email' });
+  try {
+    await saveContact(type, { name, brokerage, phone, email });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/admin/contacts-delete', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: 'No id' });
+  try {
+    await pool.query('DELETE FROM saved_contacts WHERE id = $1', [id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/admin/sms-log', adminAuthLimiter, async function(req, res) {
   if (!checkAdmin(req)) return res.redirect('/admin/login');
 
@@ -3966,6 +4076,522 @@ tr:hover td{background:rgba(201,168,76,.04);}
     </table>
   </div>
 </div>
+</body>
+</html>`);
+});
+
+// ── ADMIN: CREATE INSPECTION DIRECTLY ──────────────────────────────────────
+// Lets Jaren book a job himself (phone call, walk-up, etc.) without the
+// client filling out the public form. Reuses the exact same server-side
+// pricing and trip-charge logic as a normal booking. When "notify" is on,
+// this goes through the real /confirm flow internally so the client/agents
+// get the identical normal booking-confirmed emails/texts and the job lands
+// on the calendar exactly like any other booking. When off, it inserts the
+// confirmed booking directly with no notifications sent.
+app.post('/admin/create-inspection', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const role = adminRole(req);
+  const b = req.body;
+  const opId = getOperator(role === 'jeff' ? 'jeff' : (b.operator || 'jaren'));
+  const opCfg = OPERATORS[opId];
+
+  let { address, sqft, yearBuilt, inspType, totalMins, date, time, endTime, buyer, buyerAgent, sellerAgent, notes } = b;
+  const addons = b.addons || [];
+  const notify = b.notify !== false; // default true
+
+  address = clip(address, LEN.address);
+  notes = clip(notes, LEN.notes);
+  if (buyer && typeof buyer === 'object') {
+    buyer.firstName = clip(buyer.firstName, LEN.name);
+    buyer.lastName = clip(buyer.lastName, LEN.name);
+    buyer.email = clip(buyer.email, LEN.email);
+    buyer.phone = clip(buyer.phone, LEN.phone);
+  }
+
+  const miss = [];
+  if (!address) miss.push('address');
+  if (!sqft) miss.push('sqft');
+  if (!inspType) miss.push('inspType');
+  if (!date) miss.push('date');
+  if (!time) miss.push('time');
+  if (!buyer || !buyer.firstName) miss.push('buyer.firstName');
+  if (miss.length) return res.status(400).json({ error: 'Missing: ' + miss.join(', ') });
+  if (buyer.email && !isValidEmail(buyer.email)) return res.status(400).json({ error: 'Client email looks invalid.' });
+  if (buyer.phone && !isValidPhone(buyer.phone)) return res.status(400).json({ error: 'Client phone looks invalid.' });
+
+  const priced = computePrice({ sqft, yearBuilt, addons, date, time });
+  if (!priced) return res.status(400).json({ error: 'Invalid square footage' });
+  const totalPrice = (b.overridePrice !== undefined && b.overridePrice !== null && b.overridePrice !== '')
+    ? Number(b.overridePrice) : priced.price;
+
+  const confId = 'STH-' + uuidv4().slice(0, 8).toUpperCase();
+  const fullName = buyer.firstName + ' ' + (buyer.lastName || '');
+  const sm = slotToMins(time);
+  const slotH = Math.floor(sm / 60), slotM = sm % 60;
+  const startDT = new Date(`${date}T${String(slotH).padStart(2, '0')}:${String(slotM).padStart(2, '0')}:00-07:00`);
+  const endDT = new Date(startDT.getTime() + (totalMins || 120) * 60000);
+
+  const SVC = {
+    'pre-purchase': 'Pre-Purchase Inspection', 'pre-listing': 'Pre-Listing Inspection',
+    'new-construction': 'New Construction Inspection', 'warranty': 'Pre-One Year Warranty Inspection', 'reinspection': 'Re-Inspection',
+  };
+  const svcLabel = SVC[inspType] || inspType;
+  const addonsLine = addons.length ? addons.join(', ') : 'None';
+  const dateFmt = startDT.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: TIMEZONE });
+
+  try {
+    const [chk, blockChk] = await Promise.all([
+      calendar.events.list({ calendarId: CALENDAR_ID, timeMin: startDT.toISOString(), timeMax: endDT.toISOString(), singleEvents: true }),
+      calendar.events.list({ calendarId: BLOCK_CALENDAR_ID, timeMin: startDT.toISOString(), timeMax: endDT.toISOString(), singleEvents: true }).catch(function () { return { data: { items: [] } }; }),
+    ]);
+    if ((chk.data.items || []).length || (blockChk.data.items || []).length) {
+      return res.status(409).json({ error: 'That slot conflicts with an existing booking or block. Choose another time.' });
+    }
+  } catch (e) { console.warn('Admin create-inspection slot check failed:', e.message); }
+
+  const trip = await checkTripCharge(address);
+  const finalPrice = trip.apply ? totalPrice + TRIP_CHARGE_AMT : totalPrice;
+  const miles = (trip.miles !== null && trip.miles !== undefined) ? Math.round(trip.miles * 2 * 100) / 100 : null;
+
+  const bookingData = { confId, address, sqft, yearBuilt, inspType, svcLabel, addons, addonsLine, totalPrice, finalPrice, totalMins, date, time, endTime, dateFmt, fullName, buyer, buyerAgent, sellerAgent, notes, extraEmails: [], discountCode: null, discountPct: null, discountAmount: null, tripCharge: trip, miles, operator: opId, createdAt: Date.now() };
+
+  if (notify) {
+    // Route through the real confirm flow so this behaves identically to a
+    // normal booking — same emails, same texts, same calendar creation.
+    try {
+      const token = uuidv4();
+      await dbSet(token, bookingData);
+      await pool.query('UPDATE pending_bookings SET operator = $1 WHERE token = $2', [opId, token]);
+      const BASE_URL = process.env.RAILWAY_URL || 'https://santanproperty-backend-production.up.railway.app';
+      const sig = signToken(token);
+      const confirmResp = await fetch(BASE_URL + '/confirm/' + token + '?step=2&s=' + sig, {
+        headers: { 'x-internal-request': '1' },
+      });
+      if (!confirmResp.ok) {
+        const t = await confirmResp.text().catch(function () { return ''; });
+        console.error('Admin create-inspection internal confirm failed:', confirmResp.status, t.slice(0, 200));
+        return res.status(500).json({ error: 'Booking was created but confirmation failed to send. Check the booking manually.' });
+      }
+    } catch (e) {
+      console.error('Admin create-inspection notify path failed:', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  } else {
+    // Silent path — insert directly, no notifications, but still create the
+    // calendar event and save contacts, same as a normal confirmed booking.
+    try {
+      await pool.query(
+        'INSERT INTO confirmed_bookings (conf_id, data, miles, operator) VALUES ($1, $2, $3, $4) ON CONFLICT (conf_id) DO NOTHING',
+        [confId, JSON.stringify(bookingData), miles, opId]
+      );
+      const targetCalId = (opId === 'jeff') ? (process.env.CALENDAR_ID_JEFF || null) : CALENDAR_ID;
+      if (targetCalId) {
+        try {
+          await calendar.events.insert({
+            calendarId: targetCalId,
+            requestBody: {
+              summary: svcLabel + ' — ' + fullName,
+              location: address,
+              description: 'Confirmation #: ' + confId + (notes ? '\nNotes: ' + notes : ''),
+              start: { dateTime: startDT.toISOString(), timeZone: TIMEZONE },
+              end: { dateTime: endDT.toISOString(), timeZone: TIMEZONE },
+            },
+          });
+        } catch (e) { console.warn('Admin create-inspection calendar insert failed:', e.message); }
+      }
+      saveContact('customer', { name: fullName, phone: buyer.phone, email: buyer.email }).catch(function(){});
+      const ba = (buyerAgent && typeof buyerAgent === 'object') ? buyerAgent : {};
+      if (ba.name || ba.phone || ba.email) saveContact('agent', ba).catch(function(){});
+      const sa = (sellerAgent && typeof sellerAgent === 'object') ? sellerAgent : {};
+      if (sa.name || sa.phone || sa.email) saveContact('agent', sa).catch(function(){});
+    } catch (e) {
+      console.error('Admin create-inspection silent path failed:', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  res.json({ success: true, confId: confId });
+});
+
+
+// ── ADMIN: NEW INSPECTION FORM ─────────────────────────────────────────────
+app.get('/admin/new-inspection', adminAuthLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.redirect('/admin/login');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>New Inspection — San Tan Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;color:#BEC8D8;min-height:100vh;}
+nav{background:#0a1428;border-bottom:2px solid #C9A84C;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}
+nav h1{font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:1px;text-transform:uppercase;}
+.navlink{color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px;}
+.wrap{max-width:760px;margin:0 auto;padding:28px 20px 60px;}
+.card{background:#1B2D52;border-radius:10px;padding:24px;margin-bottom:18px;}
+.card h2{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#C9A84C;margin-bottom:16px;}
+.row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
+.field{flex:1;min-width:160px;position:relative;}
+label{display:block;font-size:.72rem;color:#8A9AB5;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px;}
+input[type=text],input[type=number],input[type=date],input[type=time],select,textarea{width:100%;background:#0F1C35;border:1px solid #243660;color:#EDF2F7;border-radius:6px;padding:9px 12px;font-size:.88rem;font-family:inherit;}
+textarea{min-height:70px;resize:vertical;}
+.addons{display:flex;flex-wrap:wrap;gap:10px;}
+.addons label{display:flex;align-items:center;gap:6px;background:#0F1C35;border:1px solid #243660;border-radius:6px;padding:7px 12px;font-size:.8rem;color:#BEC8D8;text-transform:none;letter-spacing:0;cursor:pointer;}
+.addons input{width:auto;}
+.suggestBox{position:absolute;top:100%;left:0;right:0;background:#0F1C35;border:1px solid #C9A84C;border-radius:6px;max-height:180px;overflow-y:auto;z-index:10;display:none;}
+.suggestBox.open{display:block;}
+.suggestItem{padding:8px 12px;font-size:.82rem;cursor:pointer;border-bottom:1px solid #182338;}
+.suggestItem:hover{background:#182338;}
+.checkRow{display:flex;align-items:center;gap:8px;margin-top:6px;}
+.checkRow input{width:auto;}
+.checkRow label{text-transform:none;letter-spacing:0;font-size:.85rem;color:#BEC8D8;margin:0;}
+.btn{background:#C9A84C;color:#0F1C35;border:none;border-radius:7px;padding:13px 28px;font-weight:700;cursor:pointer;font-size:.9rem;width:100%;}
+.msg{padding:12px 16px;border-radius:6px;margin-bottom:16px;font-size:.85rem;display:none;}
+.msg.ok{background:rgba(26,180,100,.15);color:#1ab464;display:block;}
+.msg.err{background:rgba(232,64,64,.15);color:#e87c7c;display:block;}
+</style>
+</head>
+<body>
+<nav>
+  <h1>New Inspection</h1>
+  <a href="/admin" class="navlink">\u2190 Back to admin</a>
+</nav>
+<div class="wrap">
+  <div id="msg" class="msg"></div>
+
+  <div class="card">
+    <h2>Property</h2>
+    <div class="row">
+      <div class="field" style="flex:2 1 300px;">
+        <label>Address</label>
+        <input type="text" id="address" placeholder="Start typing an address...">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Square Footage</label><input type="number" id="sqft"></div>
+      <div class="field"><label>Year Built</label><input type="number" id="yearBuilt"></div>
+      <div class="field">
+        <label>Service Type</label>
+        <select id="inspType">
+          <option value="pre-purchase">Pre-Purchase Inspection</option>
+          <option value="pre-listing">Pre-Listing Inspection</option>
+          <option value="new-construction">New Construction Inspection</option>
+          <option value="warranty">Pre-One Year Warranty Inspection</option>
+          <option value="reinspection">Re-Inspection</option>
+        </select>
+      </div>
+    </div>
+    <label>Add-Ons</label>
+    <div class="addons">
+      <label><input type="checkbox" value="Pool/Spa"> Pool/Spa</label>
+      <label><input type="checkbox" value="Fireplace"> Fireplace</label>
+      <label><input type="checkbox" value="Infrared Camera"> Infrared Camera</label>
+      <label><input type="checkbox" value="Out Building"> Out Building</label>
+      <label><input type="checkbox" value="Outdoor BBQ"> Outdoor BBQ</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Date &amp; Time</h2>
+    <div class="row">
+      <div class="field"><label>Date</label><input type="date" id="date"></div>
+      <div class="field"><label>Time</label><input type="time" id="time"></div>
+      <div class="field"><label>Duration (minutes)</label><input type="number" id="totalMins" value="120"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Client</h2>
+    <div class="row">
+      <div class="field" style="position:relative;">
+        <label>First Name</label>
+        <input type="text" id="buyerFirst" autocomplete="off" oninput="searchContacts('customer', this.value, 'buyerSuggest')">
+        <div class="suggestBox" id="buyerSuggest"></div>
+      </div>
+      <div class="field"><label>Last Name</label><input type="text" id="buyerLast"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Phone</label><input type="text" id="buyerPhone"></div>
+      <div class="field"><label>Email</label><input type="text" id="buyerEmail"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Buyer's Agent (optional)</h2>
+    <div class="row">
+      <div class="field" style="position:relative;">
+        <label>Name</label>
+        <input type="text" id="baName" autocomplete="off" oninput="searchContacts('agent', this.value, 'baSuggest')">
+        <div class="suggestBox" id="baSuggest"></div>
+      </div>
+      <div class="field"><label>Brokerage</label><input type="text" id="baBrokerage"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Phone</label><input type="text" id="baPhone"></div>
+      <div class="field"><label>Email</label><input type="text" id="baEmail"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Listing Agent (optional)</h2>
+    <div class="row">
+      <div class="field" style="position:relative;">
+        <label>Name</label>
+        <input type="text" id="saName" autocomplete="off" oninput="searchContacts('agent', this.value, 'saSuggest')">
+        <div class="suggestBox" id="saSuggest"></div>
+      </div>
+      <div class="field"><label>Brokerage</label><input type="text" id="saBrokerage"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Phone</label><input type="text" id="saPhone"></div>
+      <div class="field"><label>Email</label><input type="text" id="saEmail"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Notes &amp; Pricing</h2>
+    <div class="row"><div class="field"><textarea id="notes" placeholder="Notes (optional)"></textarea></div></div>
+    <div class="row">
+      <div class="field"><label>Price Override (optional)</label><input type="number" id="overridePrice" placeholder="Leave blank to use standard pricing"></div>
+    </div>
+    <div class="checkRow">
+      <input type="checkbox" id="notify" checked>
+      <label for="notify">Send the normal confirmation email and text to the client and agents</label>
+    </div>
+  </div>
+
+  <button class="btn" onclick="submitBooking()">Create Inspection</button>
+</div>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_API_KEY || ''}&libraries=places"></script>
+<script>
+function esc(s) { return (s||'').replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+function initAutocomplete() {
+  try {
+    const ac = new google.maps.places.Autocomplete(document.getElementById('address'), { types: ['address'], componentRestrictions: { country: 'us' } });
+    ac.addListener('place_changed', function() {
+      const place = ac.getPlace();
+      if (place.formatted_address) document.getElementById('address').value = place.formatted_address.replace(/,?\\s*USA\\s*$/i, '');
+    });
+  } catch(e) { console.warn('Places autocomplete unavailable:', e); }
+}
+window.addEventListener('load', initAutocomplete);
+
+let searchTimer;
+async function searchContacts(type, q, boxId) {
+  clearTimeout(searchTimer);
+  const box = document.getElementById(boxId);
+  if (!q || q.length < 2) { box.classList.remove('open'); return; }
+  searchTimer = setTimeout(async function() {
+    const r = await fetch('/admin/contacts-search?type=' + type + '&q=' + encodeURIComponent(q));
+    const d = await r.json();
+    if (!d.contacts || !d.contacts.length) { box.classList.remove('open'); return; }
+    box.innerHTML = d.contacts.map(function(c, i) {
+      const sub = type === 'agent' ? (c.brokerage || c.phone || '') : (c.phone || c.email || '');
+      return '<div class="suggestItem" onclick="pickContact(\\'' + type + '\\',\\'' + boxId + '\\',' + i + ')">' + esc(c.name||'(no name)') + (sub ? ' <span style="color:#8A9AB5">\u2014 ' + esc(sub) + '</span>' : '') + '</div>';
+    }).join('');
+    box._data = d.contacts;
+    box.classList.add('open');
+  }, 200);
+}
+function pickContact(type, boxId, i) {
+  const box = document.getElementById(boxId);
+  const c = box._data[i];
+  box.classList.remove('open');
+  if (boxId === 'buyerSuggest') {
+    const parts = (c.name||'').split(' ');
+    document.getElementById('buyerFirst').value = parts[0] || '';
+    document.getElementById('buyerLast').value = parts.slice(1).join(' ') || '';
+    document.getElementById('buyerPhone').value = c.phone || '';
+    document.getElementById('buyerEmail').value = c.email || '';
+  } else if (boxId === 'baSuggest') {
+    document.getElementById('baName').value = c.name || '';
+    document.getElementById('baBrokerage').value = c.brokerage || '';
+    document.getElementById('baPhone').value = c.phone || '';
+    document.getElementById('baEmail').value = c.email || '';
+  } else if (boxId === 'saSuggest') {
+    document.getElementById('saName').value = c.name || '';
+    document.getElementById('saBrokerage').value = c.brokerage || '';
+    document.getElementById('saPhone').value = c.phone || '';
+    document.getElementById('saEmail').value = c.email || '';
+  }
+}
+
+async function submitBooking() {
+  const msg = document.getElementById('msg');
+  msg.className = 'msg'; msg.textContent = '';
+  const addons = Array.from(document.querySelectorAll('.addons input:checked')).map(function(el){return el.value;});
+  const body = {
+    address: document.getElementById('address').value,
+    sqft: document.getElementById('sqft').value,
+    yearBuilt: document.getElementById('yearBuilt').value,
+    inspType: document.getElementById('inspType').value,
+    addons: addons,
+    date: document.getElementById('date').value,
+    time: document.getElementById('time').value,
+    totalMins: document.getElementById('totalMins').value,
+    buyer: {
+      firstName: document.getElementById('buyerFirst').value,
+      lastName: document.getElementById('buyerLast').value,
+      phone: document.getElementById('buyerPhone').value,
+      email: document.getElementById('buyerEmail').value,
+    },
+    buyerAgent: {
+      name: document.getElementById('baName').value,
+      brokerage: document.getElementById('baBrokerage').value,
+      phone: document.getElementById('baPhone').value,
+      email: document.getElementById('baEmail').value,
+    },
+    sellerAgent: {
+      name: document.getElementById('saName').value,
+      brokerage: document.getElementById('saBrokerage').value,
+      phone: document.getElementById('saPhone').value,
+      email: document.getElementById('saEmail').value,
+    },
+    notes: document.getElementById('notes').value,
+    overridePrice: document.getElementById('overridePrice').value || null,
+    notify: document.getElementById('notify').checked,
+  };
+  const r = await fetch('/admin/create-inspection', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (d.success) {
+    msg.className = 'msg ok';
+    msg.textContent = 'Inspection created — confirmation ' + d.confId + (body.notify ? '. Client and agents have been notified.' : '. No notifications were sent.');
+    window.scrollTo(0,0);
+  } else {
+    msg.className = 'msg err';
+    msg.textContent = d.error || 'Something went wrong.';
+    window.scrollTo(0,0);
+  }
+}
+</script>
+</body>
+</html>`);
+});
+
+app.get('/admin/contacts', adminAuthLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.redirect('/admin/login');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Contacts — San Tan Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;color:#BEC8D8;min-height:100vh;}
+nav{background:#0a1428;border-bottom:2px solid #C9A84C;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+nav h1{font-size:1rem;font-weight:700;color:#C9A84C;letter-spacing:1px;text-transform:uppercase;}
+.navlink{color:#C9A84C;font-size:.78rem;text-decoration:none;border:1px solid #C9A84C;padding:5px 12px;border-radius:6px;}
+.wrap{max-width:1000px;margin:0 auto;padding:28px 20px;}
+.tabs{display:flex;gap:8px;margin-bottom:18px;}
+.tab{background:#1B2D52;color:#8A9AB5;border:1px solid #243660;border-radius:7px;padding:9px 18px;font-size:.82rem;font-weight:700;cursor:pointer;}
+.tab.active{background:#C9A84C;color:#0F1C35;border-color:#C9A84C;}
+.card{background:#1B2D52;border-radius:10px;overflow:hidden;margin-bottom:20px;}
+.card-hd{padding:14px 20px;border-bottom:1px solid #243660;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.card-hd h2{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#C9A84C;}
+input[type=text]{background:#0F1C35;border:1px solid #243660;color:#BEC8D8;border-radius:6px;padding:8px 12px;font-size:.85rem;}
+#searchBox{width:220px;}
+table{width:100%;border-collapse:collapse;}
+th{padding:10px 16px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#4A5A7A;border-bottom:1px solid #243660;white-space:nowrap;}
+td{padding:12px 16px;font-size:.83rem;border-bottom:1px solid #162240;vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:rgba(201,168,76,.04);}
+.empty{padding:32px;text-align:center;color:#4A5A7A;font-size:.85rem;}
+.btn{background:#C9A84C;color:#0F1C35;border:none;border-radius:6px;padding:9px 18px;font-weight:700;cursor:pointer;font-size:.8rem;}
+.btn-del{background:transparent;color:#e8a87c;border:1px solid #e8a87c;border-radius:5px;padding:4px 10px;font-size:.72rem;cursor:pointer;}
+.addForm{display:none;padding:16px 20px;border-bottom:1px solid #243660;flex-wrap:wrap;gap:10px;}
+.addForm.open{display:flex;}
+.addForm input{flex:1;min-width:140px;}
+</style>
+</head>
+<body>
+<nav>
+  <h1>Contacts</h1>
+  <a href="/admin" class="navlink">\u2190 Back to admin</a>
+</nav>
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab active" id="tabAgent" onclick="switchTab('agent')">Agents</div>
+    <div class="tab" id="tabCustomer" onclick="switchTab('customer')">Customers</div>
+  </div>
+  <div class="card">
+    <div class="card-hd">
+      <h2 id="cardTitle">Agents</h2>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="searchBox" placeholder="Search name, phone, email..." oninput="doSearch()">
+        <button class="btn" onclick="toggleAddForm()">+ Add</button>
+      </div>
+    </div>
+    <div class="addForm" id="addForm">
+      <input type="text" id="addName" placeholder="Name">
+      <input type="text" id="addBrokerage" placeholder="Brokerage" id="addBrokerageField">
+      <input type="text" id="addPhone" placeholder="Phone">
+      <input type="text" id="addEmail" placeholder="Email">
+      <button class="btn" onclick="submitAdd()">Save</button>
+    </div>
+    <table>
+      <tr id="headerRow"><th>Name</th><th>Brokerage</th><th>Phone</th><th>Email</th><th>Last Used</th><th></th></tr>
+      <tbody id="rows"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script>
+let currentType = 'agent';
+function switchTab(type) {
+  currentType = type;
+  document.getElementById('tabAgent').classList.toggle('active', type === 'agent');
+  document.getElementById('tabCustomer').classList.toggle('active', type === 'customer');
+  document.getElementById('cardTitle').textContent = type === 'agent' ? 'Agents' : 'Customers';
+  document.getElementById('addBrokerageField').style.display = type === 'agent' ? '' : 'none';
+  document.getElementById('headerRow').innerHTML = type === 'agent'
+    ? '<th>Name</th><th>Brokerage</th><th>Phone</th><th>Email</th><th>Last Used</th><th></th>'
+    : '<th>Name</th><th>Phone</th><th>Email</th><th>Last Used</th><th></th>';
+  document.getElementById('searchBox').value = '';
+  load();
+}
+function esc(s) { return (s||'').replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+async function load(q) {
+  const url = '/admin/contacts-search?type=' + currentType + (q ? '&q=' + encodeURIComponent(q) : '');
+  const r = await fetch(url);
+  const d = await r.json();
+  const rows = document.getElementById('rows');
+  if (!d.contacts || !d.contacts.length) { rows.innerHTML = '<tr><td colspan="6" class="empty">No contacts yet — they\\'ll appear automatically as bookings come in, or add one manually above.</td></tr>'; return; }
+  rows.innerHTML = d.contacts.map(function(c) {
+    const when = c.last_used_at ? new Date(c.last_used_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '\u2014';
+    const brokCell = currentType === 'agent' ? '<td>' + esc(c.brokerage||'\u2014') + '</td>' : '';
+    return '<tr><td>' + esc(c.name||'\u2014') + '</td>' + brokCell + '<td>' + esc(c.phone||'\u2014') + '</td><td>' + esc(c.email||'\u2014') + '</td><td class="agent">' + when + '</td>'
+      + '<td><button class="btn-del" onclick="delContact(' + c.id + ')">Remove</button></td></tr>';
+  }).join('');
+}
+function doSearch() { load(document.getElementById('searchBox').value); }
+function toggleAddForm() { document.getElementById('addForm').classList.toggle('open'); }
+async function submitAdd() {
+  const name = document.getElementById('addName').value.trim();
+  const brokerage = document.getElementById('addBrokerage').value.trim();
+  const phone = document.getElementById('addPhone').value.trim();
+  const email = document.getElementById('addEmail').value.trim();
+  if (!name && !phone && !email) { alert('Enter at least a name, phone, or email.'); return; }
+  const r = await fetch('/admin/contacts-save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type: currentType, name, brokerage, phone, email}) });
+  const d = await r.json();
+  if (!d.success) { alert('Could not save: ' + (d.error||'unknown error')); return; }
+  document.getElementById('addName').value = '';
+  document.getElementById('addBrokerage').value = '';
+  document.getElementById('addPhone').value = '';
+  document.getElementById('addEmail').value = '';
+  document.getElementById('addForm').classList.remove('open');
+  load();
+}
+async function delContact(id) {
+  if (!confirm('Remove this contact?')) return;
+  await fetch('/admin/contacts-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id}) });
+  load();
+}
+load();
+</script>
 </body>
 </html>`);
 });
