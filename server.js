@@ -382,18 +382,21 @@ function fmtPhone(raw) {
   return null;
 }
 
+// Returns true/false so callers (e.g. the admin resend actions) can report
+// real success/failure. Existing fire-and-forget callers that don't use the
+// return value are unaffected.
 async function sms(to, body) {
   const num = fmtPhone(to);
-  if (!num) { console.warn('Bad phone, skipping SMS:', to); await logSms(to, body, false, 'Could not normalize phone number'); return; }
+  if (!num) { console.warn('Bad phone, skipping SMS:', to); await logSms(to, body, false, 'Could not normalize phone number'); return false; }
   if (!QUO_API_KEY || !QUO_FROM) {
     console.warn('Quo not configured (QUO_API_KEY or QUO_PHONE_NUMBER missing), skipping SMS to ' + num);
     await logSms(num, body, false, 'QUO_API_KEY or QUO_PHONE_NUMBER not configured');
-    return;
+    return false;
   }
   if (num === QUO_FROM) {
     console.warn('Refusing to send SMS to self (from === to ===', num + ')');
     await logSms(num, body, false, 'Refused: from === to');
-    return;
+    return false;
   }
   try {
     const res = await fetch('https://api.openphone.com/v1/messages', {
@@ -412,13 +415,15 @@ async function sms(to, body) {
       const errText = await res.text().catch(function(){ return ''; });
       console.error('SMS error to ' + num + ': HTTP ' + res.status + ' ' + errText.slice(0, 200));
       await logSms(num, body, false, 'HTTP ' + res.status + ': ' + errText.slice(0, 200));
-      return;
+      return false;
     }
     console.log('SMS sent to ' + num);
     await logSms(num, body, true, null);
+    return true;
   } catch (e) {
     console.error('SMS error to ' + num + ': ' + e.message);
     await logSms(num, body, false, e.message);
+    return false;
   }
 }
 
@@ -4018,20 +4023,30 @@ app.get('/admin/sms-log', adminAuthLimiter, async function(req, res) {
     console.error('sms-log fetch:', e.message);
   }
 
+  const resendableCount = rows.filter(function(row) { return !row.ok && row.to_number && row.body; }).length;
+  const resendAllBtnHtml = '<button type="button" class="resend-all-btn" data-action="resend-all-failed"'
+    + (resendableCount ? '' : ' disabled')
+    + '>Resend All Failed (' + resendableCount + ')</button>';
+
   const rowsHtml = rows.length ? rows.map(function(row) {
     const when = new Date(row.sent_at).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short' });
     const statusBadge = row.ok
       ? '<span class="badge badge-signed">Sent</span>'
       : '<span class="badge badge-unsigned">Failed</span>';
     const bodyPreview = (row.body || '').length > 140 ? escapeHtml(row.body.slice(0, 140)) + '…' : escapeHtml(row.body || '');
+    const canResend = !row.ok && row.to_number && row.body;
+    const resendCell = canResend
+      ? '<button type="button" class="resend-btn" data-action="resend-sms" data-id="' + row.id + '">Resend</button>'
+      : '';
     return '<tr>'
       + '<td>' + when + '</td>'
       + '<td>' + escapeHtml(row.to_number || '—') + '</td>'
       + '<td>' + statusBadge + (row.error ? '<div class="resc-msg">' + escapeHtml(row.error) + '</div>' : '') + '</td>'
       + '<td style="max-width:420px">' + bodyPreview + '</td>'
       + '<td class="agent">' + escapeHtml(row.source || '—') + '</td>'
+      + '<td>' + resendCell + '</td>'
       + '</tr>';
-  }).join('') : '<tr><td colspan="5" class="empty">No texts logged yet.</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="empty">No texts logged yet.</td></tr>';
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -4060,6 +4075,11 @@ tr:hover td{background:rgba(201,168,76,.04);}
 .badge-signed{background:rgba(26,180,100,.15);color:#1ab464;}
 .badge-unsigned{background:rgba(192,57,43,.15);color:#e8a87c;}
 .resc-msg{font-size:.72rem;color:#8A9AB5;margin-top:3px;font-style:italic;}
+.resend-btn{background:transparent;border:1px solid #C9A84C;color:#C9A84C;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:5px 10px;border-radius:6px;cursor:pointer;}
+.resend-btn:hover{background:rgba(201,168,76,.12);}
+.resend-btn:disabled{opacity:.5;cursor:default;}
+.resend-all-btn{background:#C9A84C;border:1px solid #C9A84C;color:#0a1428;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 14px;border-radius:6px;cursor:pointer;}
+.resend-all-btn:disabled{opacity:.4;cursor:default;}
 </style>
 </head>
 <body>
@@ -4069,15 +4089,111 @@ tr:hover td{background:rgba(201,168,76,.04);}
 </nav>
 <div class="wrap">
   <div class="card">
-    <div class="card-hd"><h2>Last 300 Texts</h2><span>Most recent first · both services</span></div>
+    <div class="card-hd">
+      <h2>Last 300 Texts</h2>
+      <span>Most recent first · both services</span>
+      ${resendAllBtnHtml}
+    </div>
     <table>
-      <tr><th>Sent</th><th>To</th><th>Status</th><th>Message</th><th>Source</th></tr>
+      <tr><th>Sent</th><th>To</th><th>Status</th><th>Message</th><th>Source</th><th>Action</th></tr>
       ${rowsHtml}
     </table>
   </div>
 </div>
+<script>
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-action="resend-sms"]');
+  if (btn) {
+    if (btn.disabled) return;
+    if (!confirm('Resend this text?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    fetch('/admin/sms-log/resend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: btn.getAttribute('data-id') })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.success) {
+        window.location.reload();
+      } else {
+        alert('Resend failed: ' + (data.error || 'unknown error'));
+        btn.disabled = false;
+        btn.textContent = 'Resend';
+      }
+    }).catch(function(err) {
+      alert('Resend failed: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Resend';
+    });
+    return;
+  }
+  var allBtn = e.target.closest('[data-action="resend-all-failed"]');
+  if (allBtn) {
+    if (allBtn.disabled) return;
+    if (!confirm('Resend every failed text on this page? This sends real texts again.')) return;
+    allBtn.disabled = true;
+    allBtn.textContent = 'Sending...';
+    fetch('/admin/sms-log/resend-all-failed', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { alert('Resend failed: ' + data.error); allBtn.disabled = false; allBtn.textContent = 'Resend All Failed'; return; }
+        alert('Sent ' + data.sent + ' of ' + data.attempted + ' failed texts.');
+        window.location.reload();
+      }).catch(function(err) {
+        alert('Resend failed: ' + err.message);
+        allBtn.disabled = false;
+        allBtn.textContent = 'Resend All Failed';
+      });
+  }
+});
+</script>
 </body>
 </html>`);
+});
+
+// ── ADMIN: RESEND A FAILED SMS ─────────────────────────────────────────────
+// Re-sends the exact to_number + body stored on a past sms_log row through
+// the same sms() helper every live send uses. sms() writes its own fresh log
+// row (success or failure) — this never edits history, it just adds a new
+// attempt, the same as if the original send had gone through.
+app.post('/admin/sms-log/resend', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const id = req.body && req.body.id;
+  if (!id) return res.status(400).json({ error: 'No id given' });
+  try {
+    const r = await pool.query('SELECT to_number, body FROM sms_log WHERE id = $1', [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Log entry not found' });
+    const row = r.rows[0];
+    if (!row.to_number || !row.body) {
+      return res.status(400).json({ error: 'This entry is missing a number or message and cannot be resent' });
+    }
+    const ok = await sms(row.to_number, row.body);
+    res.json({ success: ok });
+  } catch (e) {
+    console.error('sms resend failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── ADMIN: RESEND ALL FAILED (last 300) ─────────────────────────────────────
+// Bulk version of the above — walks every failed row in the last 300 that has
+// enough data to resend, in order, and reports how many actually went out.
+app.post('/admin/sms-log/resend-all-failed', adminActionLimiter, async function(req, res) {
+  if (!checkAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const r = await pool.query(
+      "SELECT to_number, body FROM sms_log WHERE ok = false AND to_number IS NOT NULL AND body IS NOT NULL ORDER BY sent_at DESC LIMIT 300"
+    );
+    let sent = 0;
+    for (const row of r.rows) {
+      const ok = await sms(row.to_number, row.body);
+      if (ok) sent++;
+    }
+    res.json({ success: true, attempted: r.rows.length, sent: sent });
+  } catch (e) {
+    console.error('sms resend-all failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── ADMIN: CREATE INSPECTION DIRECTLY ──────────────────────────────────────
