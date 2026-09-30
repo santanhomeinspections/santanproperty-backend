@@ -1228,7 +1228,16 @@ function buildHubPage(booking, row, reportInfo, hubToken) {
   // ── Report section ─────────────────────────────────────────
   let reportSection = '';
   if (!isCancelled) {
-    if (reportState === 'delivered') {
+    if (reportState === 'delivered' && !isSigned) {
+      // Report exists and may already be sent, but the agreement isn't signed
+      // yet — /report.pdf will 403 this client, so don't dangle a dead-end
+      // "delivered" message or download button here either.
+      reportSection = '<div class="section section-action">'
+        + '<h2>Your Report</h2>'
+        + '<p>Your inspection report is ready, but it\'s held until your inspection agreement is signed.</p>'
+        + '<a href="' + escapeHtml(agreementUrl) + '" class="btn btn-primary">Review &amp; Sign Agreement</a>'
+        + '</div>';
+    } else if (reportState === 'delivered') {
       // Build a download URL only if we have a PDF key on file. Older reports
       // delivered before the inspector tracked pdf_r2_key won't have one — in
       // that case we just say "check your email" without a download button.
@@ -2843,6 +2852,50 @@ app.get('/api/agreement-status/:confId', async function(req, res) {
   }
 });
 
+// ── SIGN WALL ─────────────────────────────────────────────────
+// Branded page shown wherever a client is blocked from viewing something
+// (currently: the report PDF) because their inspection agreement isn't
+// signed yet. Matches buildHubPage's look so it never feels like a broken
+// link — just an extra step, with a clear button straight to signing.
+function buildSignWallPage(signUrl) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Signature Required — San Tan Property Inspections</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1C35;min-height:100vh;padding:24px 16px;color:#222;}
+.outer{max-width:480px;margin:60px auto 0;}
+.logo-bar{background:#0F1C35;border-radius:10px;padding:18px;margin-bottom:16px;text-align:center;}
+.logo-title{font-family:Georgia,serif;font-size:1.05rem;font-weight:700;color:#C9A84C;letter-spacing:2px;}
+.logo-sub{font-family:Georgia,serif;font-size:.7rem;color:#E8C97A;letter-spacing:4px;margin-top:3px;}
+.card{background:#fff;border-radius:16px;padding:36px 32px;box-shadow:0 28px 70px rgba(0,0,0,.4);text-align:center;}
+.card h1{font-family:Georgia,serif;color:#1B2D52;font-size:1.25rem;margin-bottom:12px;}
+.card p{color:#666;font-size:.92rem;line-height:1.6;margin-bottom:22px;}
+.btn{display:inline-block;background:#1B2D52;color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:.95rem;font-weight:700;text-decoration:none;font-family:inherit;}
+.btn:hover{background:#243a6e;}
+.footnote{color:#8A93A6;font-size:.78rem;text-align:center;margin-top:16px;}
+</style>
+</head>
+<body>
+<div class="outer">
+  <div class="logo-bar">
+    <div class="logo-title">SAN TAN PROPERTY</div>
+    <div class="logo-sub">INSPECTIONS</div>
+  </div>
+  <div class="card">
+    <h1>Signature Required</h1>
+    <p>This report is held until your inspection agreement is signed. It only takes about a minute.</p>
+    <a href="${escapeHtml(signUrl)}" class="btn">Review &amp; Sign Agreement</a>
+  </div>
+  <p class="footnote">Questions? Call or text (480) 618-0805.</p>
+</div>
+</body>
+</html>`;
+}
+
 // ── CUSTOMER HUB ──────────────────────────────────────────────
 // Single status page for the client. Linked from the booking confirmation
 // email; replaces having to dig through separate emails for the agreement,
@@ -2945,7 +2998,7 @@ app.get('/i/:token/report.pdf', agreementLimiter, async function(req, res) {
   let row;
   try {
     const r = await pool.query(
-      `SELECT data, cancelled_at FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
+      `SELECT data, cancelled_at, agreement_signed_at FROM confirmed_bookings WHERE data->>'agreementToken' = $1 LIMIT 1`,
       [token]
     );
     row = r.rows[0];
@@ -2953,6 +3006,15 @@ app.get('/i/:token/report.pdf', agreementLimiter, async function(req, res) {
     return res.status(500).send('Database error.');
   }
   if (!row || row.cancelled_at) return res.status(404).send('Not found.');
+
+  // Gate on the signed agreement, independent of payment. This is the actual
+  // enforcement point — the hub page's messaging says the report is held
+  // until signing, but until this check existed that was only true visually;
+  // the link itself (email/text/bookmark) would still serve the PDF.
+  if (!row.agreement_signed_at) {
+    const signUrl = '/agreement/' + encodeURIComponent(token) + '?s=' + encodeURIComponent(signToken(token));
+    return res.status(403).send(buildSignWallPage(signUrl));
+  }
 
   const confId = row.data && row.data.confId;
   const info   = await getReportInfoForConfId(confId);
